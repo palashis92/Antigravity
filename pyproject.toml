@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lumi-robot"
+version = "0.1.0"
+description = "LUMI - Expressive Physical AI Companion Robot for Raspberry Pi 5"
+authors = [{ name = "Palash" }]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+pi = [
+    "adafruit-circuitpython-pca9685",
+    "adafruit-circuitpython-servokit",
+    "spidev",
+    "RPi.GPIO",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

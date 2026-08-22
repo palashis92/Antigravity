@@ -1,0 +1,37 @@
+# LUMI AI Companion Robot - Dependencies
+# ========================================
+
+# Core
+pyyaml>=6.0
+pydantic>=2.0
+pillow>=10.0
+
+# AI & Conversation (Inworld.ai + OpenAI Whisper STT)
+openai>=1.0
+
+# Vision
+opencv-python>=4.8
+face_recognition
+python-chess
+
+# Audio & Speech
+gTTS>=2.3
+numpy>=1.24
+openwakeword>=0.6.0
+
+# Web Tools
+duckduckgo-search>=4.0
+
+# Document Generation
+reportlab>=4.0
+
+# Testing
+pytest>=8.0
+
+# Hardware (auto-detected, only needed on Raspberry Pi)
+# adafruit-circuitpython-pca9685
+# RPi.GPIO
+# spidev
+# smbus2
+# picamera2
+# tflite-runtime

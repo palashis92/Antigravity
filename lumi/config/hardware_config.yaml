@@ -1,0 +1,65 @@
+# LUMI Hardware Mapping & Calibration Configuration
+# Note: Pending final CAD model and driver board confirmation.
+
+servo_driver:
+  model: "PCA9685"          # Configurable driver model
+  i2c_bus: 1
+  i2c_address: 0x40
+  pwm_frequency_hz: 50
+
+channels:
+  head_pan:
+    channel: 0
+    min_angle: -80
+    max_angle: 80
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: false
+
+  head_tilt:
+    channel: 1
+    min_angle: -30
+    max_angle: 45
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: false
+
+  left_arm_pitch:
+    channel: 2
+    min_angle: -45
+    max_angle: 90
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: false
+
+  right_arm_pitch:
+    channel: 3
+    min_angle: -45
+    max_angle: 90
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: true
+
+displays:
+  left_eye:
+    spi_bus: 0
+    spi_device: 0
+    dc_pin: 24
+    rst_pin: 25
+    bl_pin: 18
+
+  right_eye:
+    spi_bus: 0
+    spi_device: 1
+    dc_pin: 23
+    rst_pin: 22
+    bl_pin: 18
+
+audio_i2s:
+  bclk_pin: 18
+  lrclk_pin: 19
+  dout_pin: 21

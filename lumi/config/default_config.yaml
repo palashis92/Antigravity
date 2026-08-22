@@ -1,0 +1,51 @@
+# LUMI Master Configuration
+app:
+  name: "LUMI"
+  version: "0.1.0"
+  environment: "production"
+  log_level: "INFO"
+  data_dir: "data"
+  primary_language: "bn"
+  fallback_language: "en"
+  owner_name: ""
+
+memory:
+  db_path: "data/lumi.db"
+  wal_mode: true
+  backup_interval_hours: 24
+  auto_consent_prompt: true
+  max_conversation_history: 100
+
+audio:
+  mic_backend: "lan_mic"
+  phone_audio_url: "http://192.168.0.109:8080/audio.wav"
+  speaker_backend: "i2s"
+  sample_rate: 16000
+  channels: 1
+  volume: 100
+  stt_provider: "cloud"
+  tts_provider: "cloud"
+
+display:
+  backend: "gc9a01_spi"
+  target_fps: 30
+  width: 240
+  height: 240
+  dual_eyes: true
+  single_display_both_eyes: true
+  spi_speed_hz: 24000000
+
+motion:
+  backend: "pca9685"
+  smoothing_factor: 0.15
+  head_enabled: true
+  arms_enabled: true
+
+vision:
+  camera_backend: "none"  # Deactivated until physical Pi Camera is connected
+  phone_video_url: ""
+  frame_width: 640
+  frame_height: 480
+  fps: 15
+  face_recognition_enabled: true
+  object_detection_enabled: true

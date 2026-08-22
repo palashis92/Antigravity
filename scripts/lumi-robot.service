@@ -1,0 +1,22 @@
+[Unit]
+Description=LUMI AI Companion Robot Service
+After=network-online.target sound.target time-sync.target
+Wants=network-online.target sound.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Antigravity
+Environment="PYTHONUNBUFFERED=1"
+Environment="LUMI_ENV=production"
+Environment="LUMI_LOG_LEVEL=INFO"
+ExecStart=/home/pi/lumi_venv/bin/python -m lumi.main
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+KillMode=mixed
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
