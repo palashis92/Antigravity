@@ -103,9 +103,6 @@ class LumiBrain:
             "type": "object", "properties": {"phone_number": {"type": "string"}, "message": {"type": "string"}}, "required": ["phone_number", "message"]
         })
         
-        from ..core.command_router import CommandRouter
-        self.command_router = CommandRouter(self)
-
         from ..ai.gemini_live import GeminiLiveClient
         
         self.conversation = ConversationEngine(self.memory, self.tools)
@@ -187,13 +184,9 @@ class LumiBrain:
         return math.sqrt(sum_sq / count)
 
     def _audio_loop(self) -> None:
-        logger.info("Starting Audio Loop")
-        speech_started = False
-        speech_start_time = 0.0
-        speech_end_time = 0.0
-        buffer = bytearray()
+        logger.info("Starting Audio Loop (Streaming to Gemini Live)")
         ENERGY_THRESHOLD = 400
-
+        
         while self._running:
             chunk = self.mic.read_chunk(1024)
             if not chunk:
@@ -205,37 +198,10 @@ class LumiBrain:
                 self.realtime_voice.push_audio_chunk(chunk)
 
             energy = self._compute_rms(chunk)
-            now = time.time()
-
             if energy > ENERGY_THRESHOLD:
-                if not speech_started:
-                    if speech_start_time == 0:
-                        speech_start_time = now
-                    elif now - speech_start_time >= 0.25:
-                        speech_started = True
-                        speech_end_time = 0.0
-                        buffer.extend(chunk)
-                        logger.debug("VAD: Speech started")
-                else:
-                    speech_end_time = 0.0
-                    buffer.extend(chunk)
-            else:
-                speech_start_time = 0.0
-                if speech_started:
-                    if speech_end_time == 0:
-                        speech_end_time = now
-                    elif now - speech_end_time >= 0.8:
-                        logger.debug("VAD: Speech ended")
-                        speech_started = False
-                        if len(buffer) > 0:
-                            pcm_audio = bytes(buffer)
-                            buffer.clear()
-                            try:
-                                self.handle_user_speech_input(pcm_audio)
-                            except Exception as e:
-                                logger.error(f"Error handling speech: {e}")
-                    else:
-                        buffer.extend(chunk)
+                if self.state.current_state == BehaviorState.IDLE:
+                    self.eyes.set_expression("curious")
+            
             time.sleep(0.01)
 
     def start_loops(self) -> None:
@@ -323,55 +289,7 @@ class LumiBrain:
                     prompt = "A new person is here. Respond naturally and politely in Bengali."
                     self.realtime_voice.inject_context(prompt)
 
-    def handle_user_speech_input(self, pcm_bytes: bytes) -> str:
-        """Process spoken audio buffer -> Command Router (Local Priority) -> LLM Fallback -> TTS."""
-        self.state.transition_to(BehaviorState.LISTENING, reason="user_speaking")
-        self.eyes.set_expression("curious")
-        transcription = self.stt.transcribe_pcm_bytes(pcm_bytes)
-        if not transcription:
-            self.state.transition_to(BehaviorState.IDLE, reason="empty_speech")
-            return ""
 
-        print(f"\n🗣️  [YOU / USER]: {transcription}")
-        logger.info(f"User Spoke: '{transcription}'")
-
-        # ---------------------------------------------------------------------
-        # PRIORITY 1: Check Local Skills & Commands First (Zero Cloud LLM Overhead)
-        # ---------------------------------------------------------------------
-        local_reply = self.command_router.route_speech(transcription)
-        if local_reply is not None:
-            print(f"🤖 [LUMI (Local)]: {local_reply}")
-            logger.info(f"LUMI Executed Local Command Response: '{local_reply}'")
-            if local_reply.strip():
-                self.state.transition_to(BehaviorState.SPEAKING, reason="local_cmd_reply")
-                audio_path = self.tts.synthesize(local_reply)
-                if audio_path:
-                    self.speaker.play_file(audio_path, block=True)
-            self.state.transition_to(BehaviorState.IDLE, reason="local_cmd_finished")
-            return local_reply
-
-        # ---------------------------------------------------------------------
-        # PRIORITY 2: Send to Conversational LLM if no local command matched
-        # ---------------------------------------------------------------------
-        self.state.transition_to(BehaviorState.THINKING, reason="ai_processing")
-        self.eyes.set_expression("thinking")
-        self.gestures.play_async(self.gestures.thinking, name="thinking")
-
-        response = self.conversation.generate_response(
-            transcription, current_person=self.active_person
-        )
-        print(f"🤖 [LUMI (AI)]: {response}")
-        logger.info(f"LUMI Responded (LLM): '{response}'")
-
-        self.state.transition_to(BehaviorState.SPEAKING, reason="robot_replying")
-        self.eyes.set_expression("happy")
-
-        audio_path = self.tts.synthesize(response)
-        if audio_path:
-            self.speaker.play_file(audio_path, block=True)
-
-        self.state.transition_to(BehaviorState.IDLE, reason="reply_finished")
-        return response
 
     def analyze_plant_leaf(self, leaf_frame: Any) -> str:
         """Run computer vision leaf pathology classifier."""
