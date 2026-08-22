@@ -129,6 +129,20 @@ class GeminiLiveClient:
                 except asyncio.CancelledError:
                     break
 
+    def _normalize_gemini_schema(self, schema: Any) -> Any:
+        """Recursively normalize JSON schema types to Gemini UPPERCASE format (OBJECT, STRING, NUMBER)."""
+        if isinstance(schema, dict):
+            new_dict = {}
+            for k, v in schema.items():
+                if k == "type" and isinstance(v, str):
+                    new_dict[k] = v.upper()
+                else:
+                    new_dict[k] = self._normalize_gemini_schema(v)
+            return new_dict
+        elif isinstance(schema, list):
+            return [self._normalize_gemini_schema(x) for x in schema]
+        return schema
+
     async def _send_setup(self, ws: Any) -> None:
         instructions = (
             "You are LUMI, an intelligent and friendly AI companion robot. "
@@ -136,7 +150,7 @@ class GeminiLiveClient:
             "Directly answer user questions and engage politely in real-time."
         )
         
-        setup_msg = {
+        setup_msg: Dict[str, Any] = {
             "setup": {
                 "model": self.model,
                 "generationConfig": {
@@ -147,9 +161,6 @@ class GeminiLiveClient:
                                 "voiceName": "Aoede"
                             }
                         }
-                    },
-                    "thinkingConfig": {
-                        "thinkingLevel": "minimal"
                     }
                 },
                 "systemInstruction": {
@@ -161,13 +172,16 @@ class GeminiLiveClient:
         if self.tools and hasattr(self.tools, "schemas"):
             gemini_tools = []
             for s in self.tools.schemas.values():
+                params = s.get("parameters", {"type": "OBJECT", "properties": {}})
                 gemini_tools.append({
                     "name": s["name"],
                     "description": s["description"],
-                    "parameters": s.get("parameters", {"type": "OBJECT", "properties": {}})
+                    "parameters": self._normalize_gemini_schema(params)
                 })
-            setup_msg["setup"]["tools"] = [{"functionDeclarations": gemini_tools}]
+            if gemini_tools:
+                setup_msg["setup"]["tools"] = [{"functionDeclarations": gemini_tools}]
             
+        logger.debug(f"Sending Gemini setup for model: {self.model}")
         await ws.send(json.dumps(setup_msg))
 
     async def _process_wake_word(self, chunk: bytes) -> bool:
