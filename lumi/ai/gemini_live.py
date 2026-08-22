@@ -243,12 +243,10 @@ class GeminiLiveClient:
                         try:
                             await ws.send(json.dumps({
                                 "realtimeInput": {
-                                    "mediaChunks": [
-                                        {
-                                            "mimeType": "audio/pcm;rate=16000",
-                                            "data": audio_b64
-                                        }
-                                    ]
+                                    "audio": {
+                                        "mimeType": "audio/pcm;rate=16000",
+                                        "data": audio_b64
+                                    }
                                 }
                             }))
                         except Exception:
@@ -265,12 +263,10 @@ class GeminiLiveClient:
                                     video_b64 = base64.b64encode(buffer).decode("utf-8")
                                     await ws.send(json.dumps({
                                         "realtimeInput": {
-                                            "mediaChunks": [
-                                                {
-                                                    "mimeType": "image/jpeg",
-                                                    "data": video_b64
-                                                }
-                                            ]
+                                            "video": {
+                                                "mimeType": "image/jpeg",
+                                                "data": video_b64
+                                            }
                                         }
                                     }))
                                 except Exception:
@@ -350,9 +346,8 @@ class GeminiLiveClient:
     def inject_context(self, text: str) -> None:
         if not self._ws or not self._awake: return
         event = {
-            "clientContent": {
-                "turns": [{"role": "user", "parts": [{"text": text}]}],
-                "turnComplete": True
+            "realtimeInput": {
+                "text": text
             }
         }
         if self._loop and self._loop.is_running():

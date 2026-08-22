@@ -40,3 +40,6 @@ logs/
 .DS_Store
 Thumbs.db
 .lgd-nfy0
+
+# Temporary execution files
+.tmp/
