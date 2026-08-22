@@ -54,7 +54,7 @@ class GeminiLiveClient:
         self.camera = camera
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         
-        self.model = "models/gemini-3.1-flash-live-preview"
+        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-2.0-flash-exp")
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -214,33 +214,38 @@ class GeminiLiveClient:
                         try:
                             await ws.send(json.dumps({
                                 "realtimeInput": {
-                                    "audio": {
-                                        "mimeType": "audio/pcm;rate=16000",
-                                        "data": audio_b64
-                                    }
+                                    "mediaChunks": [
+                                        {
+                                            "mimeType": "audio/pcm;rate=16000",
+                                            "data": audio_b64
+                                        }
+                                    ]
                                 }
                             }))
                         except Exception:
                             break
                         
-                        # Send video frame every 1 second
+                        # Send video frame if camera is available (on-demand / periodic)
                         now = time.time()
-                        if self.camera and (now - self._last_video_send > 1.0):
+                        if self.camera and self.camera.is_available() and (now - self._last_video_send > 1.0):
                             frame = self.camera.get_frame()
                             if frame is not None:
-                                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
-                                video_b64 = base64.b64encode(buffer).decode("utf-8")
                                 try:
+                                    import cv2
+                                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                                    video_b64 = base64.b64encode(buffer).decode("utf-8")
                                     await ws.send(json.dumps({
                                         "realtimeInput": {
-                                            "video": {
-                                                "mimeType": "image/jpeg",
-                                                "data": video_b64
-                                            }
+                                            "mediaChunks": [
+                                                {
+                                                    "mimeType": "image/jpeg",
+                                                    "data": video_b64
+                                                }
+                                            ]
                                         }
                                     }))
                                 except Exception:
-                                    break
+                                    pass
                             self._last_video_send = now
                 
                 await asyncio.sleep(0.01)
@@ -256,6 +261,14 @@ class GeminiLiveClient:
                 try:
                     data = json.loads(message)
                     
+                    # Setup confirmation
+                    if "setupComplete" in data:
+                        logger.info("Gemini Live session successfully established and ready!")
+
+                    # Server error message
+                    if "error" in data:
+                        logger.error(f"Gemini API Error: {data['error']}")
+
                     # Debug log incoming Gemini payload structure
                     if "serverContent" in data:
                         model_turn = data["serverContent"].get("modelTurn", {})
@@ -266,7 +279,9 @@ class GeminiLiveClient:
                                 self._last_active_time = time.time()
                                 self.speaker.play_stream(audio_bytes, sample_rate=24000)
                             elif "text" in part:
-                                logger.info(f"Gemini text: {part['text']}")
+                                text_reply = part['text']
+                                print(f"🤖 [LUMI (Live)]: {text_reply}")
+                                logger.info(f"Gemini text: {text_reply}")
                                 
                     # Handle Tool Calls
                     if "toolCall" in data:
