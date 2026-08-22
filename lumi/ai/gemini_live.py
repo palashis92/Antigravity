@@ -101,7 +101,7 @@ class GeminiLiveClient:
             self._loop.close()
 
     async def _main_task(self) -> None:
-        url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key={self.api_key}"
+        url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={self.api_key}"
         
         while self._running:
             try:
