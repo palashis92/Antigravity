@@ -216,16 +216,28 @@ class GeminiLiveClient:
             return True
         return False
 
+    def push_audio_chunk(self, chunk: bytes) -> None:
+        if hasattr(self, "_audio_queue") and self._audio_queue and getattr(self, "_awake", False):
+            try:
+                self._audio_queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                pass
+
     async def _send_av_loop(self, ws: Any) -> None:
         # Keep awake forever
         self._awake = True
+        self._audio_queue = asyncio.Queue(maxsize=100)
         try:
             while self._running:
-                chunk = self.mic.read_chunk(2560)
+                try:
+                    chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    chunk = None
+
                 if chunk and len(chunk) > 0:
                     self._last_active_time = time.time()
                     
-                    if self._awake:
+                    if self._awake and getattr(self, "_is_ready", False):
                         audio_b64 = base64.b64encode(chunk).decode("utf-8")
                         
                         try:
@@ -269,9 +281,10 @@ class GeminiLiveClient:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.debug(f"AV loop error: {e}")
+            logger.error(f"AV loop error: {e}")
 
     async def _receive_events(self, ws: Any) -> None:
+        self._is_ready = False
         try:
             async for message in ws:
                 if not self._running: break
@@ -281,10 +294,11 @@ class GeminiLiveClient:
                     # Setup confirmation
                     if "setupComplete" in data:
                         logger.info("Gemini Live session successfully established and ready!")
+                        self._is_ready = True
 
                     # Server error message
                     if "error" in data:
-                        logger.error(f"Gemini API Error: {data['error']}")
+                        logger.error(f"Gemini API Error: {data}")
 
                     # Debug log incoming Gemini payload structure
                     if "serverContent" in data:
@@ -327,10 +341,11 @@ class GeminiLiveClient:
                                 await ws.send(json.dumps(resp))
                 except Exception as e:
                     logger.debug(f"Error parsing Gemini message: {e}")
+            logger.warning(f"Gemini receive loop ended. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.debug(f"Gemini receive loop ended: {e}")
+            logger.warning(f"Gemini receive loop Exception: {e}. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")
 
     def inject_context(self, text: str) -> None:
         if not self._ws or not self._awake: return

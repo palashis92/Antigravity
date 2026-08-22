@@ -200,6 +200,10 @@ class LumiBrain:
                 time.sleep(0.01)
                 continue
 
+            # Push audio to Gemini Live / Realtime engine if supported
+            if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
+                self.realtime_voice.push_audio_chunk(chunk)
+
             energy = self._compute_rms(chunk)
             now = time.time()
 
@@ -243,6 +247,11 @@ class LumiBrain:
             target=self._perception_loop, daemon=True, name="LumiPerceptionLoop"
         )
         self._perception_thread.start()
+
+        self._audio_thread = threading.Thread(
+            target=self._audio_loop, daemon=True, name="LumiAudioLoop"
+        )
+        self._audio_thread.start()
 
         # Start Realtime Voice Engine (Inworld / OpenAI Realtime WebSocket)
         self.realtime_voice.start()
