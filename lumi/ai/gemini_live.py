@@ -154,7 +154,7 @@ class GeminiLiveClient:
             "setup": {
                 "model": self.model,
                 "generationConfig": {
-                    "responseModalities": ["AUDIO", "TEXT"],
+                    "responseModalities": ["AUDIO"],
                     "speechConfig": {
                         "voiceConfig": {
                             "prebuiltVoiceConfig": {
