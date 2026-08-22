@@ -154,7 +154,7 @@ class GeminiLiveClient:
             "setup": {
                 "model": self.model,
                 "generationConfig": {
-                    "responseModalities": ["AUDIO"],
+                    "responseModalities": ["AUDIO", "TEXT"],
                     "speechConfig": {
                         "voiceConfig": {
                             "prebuiltVoiceConfig": {
@@ -163,6 +163,8 @@ class GeminiLiveClient:
                         }
                     }
                 },
+                "inputAudioTranscription": {},
+                "outputAudioTranscription": {},
                 "systemInstruction": {
                     "parts": [{"text": instructions}]
                 }
@@ -298,18 +300,34 @@ class GeminiLiveClient:
 
                     # Debug log incoming Gemini payload structure
                     if "serverContent" in data:
-                        model_turn = data["serverContent"].get("modelTurn", {})
-                        for part in model_turn.get("parts", []):
-                            if "inlineData" in part:
-                                audio_bytes = base64.b64decode(part["inlineData"]["data"])
-                                logger.info(f"Received {len(audio_bytes)} bytes of audio from Gemini!")
-                                self._last_active_time = time.time()
-                                self.speaker.play_stream(audio_bytes, sample_rate=24000)
-                            elif "text" in part:
-                                text_reply = part['text']
-                                print(f"🤖 [LUMI (Live)]: {text_reply}")
-                                logger.info(f"Gemini text: {text_reply}")
+                        # Print transcriptions if available
+                        if "modelTurn" in data["serverContent"]:
+                            model_turn = data["serverContent"].get("modelTurn", {})
+                            for part in model_turn.get("parts", []):
+                                if "inlineData" in part:
+                                    audio_bytes = base64.b64decode(part["inlineData"]["data"])
+                                    # logger.info(f"Received {len(audio_bytes)} bytes of audio from Gemini!")
+                                    self._last_active_time = time.time()
+                                    self.speaker.play_stream(audio_bytes, sample_rate=24000)
+                                elif "text" in part:
+                                    print(f"🤖 [LUMI (Live)]: {part['text']}")
                                 
+                        # Log if we get transcriptions natively (raw API format)
+                        if "interrupted" in data["serverContent"]:
+                            print("🤖 [LUMI STATE]: Interrupted by user.")
+                            
+                    # Sometimes transcriptions arrive outside modelTurn (e.g. BidiGenerateContentServerMessage)
+                    if "serverContent" in data:
+                        content = data["serverContent"]
+                        if "inputAudioTranscription" in content:
+                            print(f"👤 [USER]: {content['inputAudioTranscription']}")
+                        if "outputAudioTranscription" in content:
+                            print(f"🤖 [LUMI (Draft)]: {content['outputAudioTranscription']}")
+                        if "inputTranscription" in content:
+                            print(f"👤 [USER]: {content['inputTranscription']}")
+                        if "outputTranscription" in content:
+                            print(f"🤖 [LUMI (Draft)]: {content['outputTranscription']}")
+                            
                     # Handle Tool Calls
                     if "toolCall" in data:
                         for call in data["toolCall"].get("functionCalls", []):
