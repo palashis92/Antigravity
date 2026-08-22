@@ -54,7 +54,7 @@ class GeminiLiveClient:
         self.camera = camera
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         
-        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-2.0-flash-exp")
+        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.1-flash-live-preview")
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -80,7 +80,7 @@ class GeminiLiveClient:
         self._running = True
         self._thread = threading.Thread(target=self._run_event_loop, daemon=True, name="GeminiLive")
         self._thread.start()
-        logger.info("Gemini Live Engine online.")
+        logger.info(f"Gemini Live Engine online (Model: {self.model}).")
 
     def stop(self) -> None:
         self._running = False
@@ -105,7 +105,7 @@ class GeminiLiveClient:
         
         while self._running:
             try:
-                logger.info("Connecting to Gemini Live...")
+                logger.info(f"Connecting to Gemini Live ({self.model})...")
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                     self._ws = ws
                     logger.info("Connected to Gemini!")
@@ -147,6 +147,9 @@ class GeminiLiveClient:
                                 "voiceName": "Aoede"
                             }
                         }
+                    },
+                    "thinkingConfig": {
+                        "thinkingLevel": "minimal"
                     }
                 },
                 "systemInstruction": {
