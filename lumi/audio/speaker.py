@@ -38,11 +38,10 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         import queue
         proc = None
         current_sample_rate = 24000
-
         while self._stream_running:
             try:
                 try:
-                    audio_bytes, sample_rate = self._stream_queue.get(timeout=0.1)
+                    audio_bytes, sample_rate = self._stream_queue.get(timeout=2.0)
                 except queue.Empty:
                     if proc is not None:
                         try:

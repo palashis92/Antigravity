@@ -188,6 +188,8 @@ class StateManager:
         if len(self._history) > 100:
             self._history.pop(0)
 
+        print(f"\n🧠 [LUMI STATE]: {old_state.name} ➡️ {new_state.name} ({reason})\n")
+
         log_msg = f"State transition: {old_state.value} -> {new_state.value}"
         if reason:
             log_msg += f" (reason: {reason})"
