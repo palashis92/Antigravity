@@ -27,7 +27,7 @@ from ..motion.gestures import GestureManager
 from ..motion.head import HeadController
 from ..motion.servo_controller import ServoController
 from ..reminders import ReminderScheduler
-from ..speech.stt import BanglaSTT
+
 from ..speech.tts import BanglaTTS
 from ..vision.camera import CameraInterface
 from ..vision.chess import ChessVision
@@ -74,7 +74,7 @@ class LumiBrain:
         self.chess_vision = ChessVision()
 
         # Audio & Speech Subsystems
-        self.stt = BanglaSTT()
+        
         self.tts = BanglaTTS()
 
         # AI & Reasoning Subsystems
@@ -291,18 +291,7 @@ class LumiBrain:
 
 
 
-    def analyze_plant_leaf(self, leaf_frame: Any) -> str:
-        """Run computer vision leaf pathology classifier."""
-        self.state.transition_to(BehaviorState.VISION_ANALYSIS, reason="plant_analysis")
-        self.eyes.set_expression("curious")
-        result = self.plant_detector.analyze_leaf(leaf_frame)
-        summary = self.plant_detector.generate_bangla_speech_summary(result)
-        self.state.transition_to(BehaviorState.SPEAKING, reason="explain_plant")
-        audio_path = self.tts.synthesize(summary)
-        if audio_path:
-            self.speaker.play_file(audio_path, block=True)
-        self.state.transition_to(BehaviorState.IDLE, reason="plant_analysis_done")
-        return summary
+
 
     # =========================================================================
     # Realtime Tools Implementation
@@ -437,17 +426,5 @@ class LumiBrain:
         logger.info(f"Mock sending WhatsApp to {phone_number}: {message}")
         return f"WhatsApp message successfully queued to {phone_number}."
 
-    def analyze_chessboard(self, board_frame: Any) -> str:
-        """Extract FEN from physical chessboard and query Stockfish UCI engine."""
-        self.state.transition_to(BehaviorState.CHESS_ANALYSIS, reason="chess_analysis")
-        self.eyes.set_expression("thinking")
-        self.gestures.play_async(self.gestures.thinking, name="thinking")
-        chess_res = self.chess_vision.extract_fen_from_frame(board_frame)
-        eval_res = self.chess_engine.analyze_position(chess_res.fen_string)
-        summary = eval_res.explanation_bn
-        self.state.transition_to(BehaviorState.SPEAKING, reason="explain_chess")
-        audio_path = self.tts.synthesize(summary)
-        if audio_path:
-            self.speaker.play_file(audio_path, block=True)
-        self.state.transition_to(BehaviorState.IDLE, reason="chess_done")
-        return summary
+
+
