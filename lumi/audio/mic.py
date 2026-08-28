@@ -34,24 +34,55 @@ class SystemMicBackend(MicBackendBase):
         return True
 
     def _reader_loop(self) -> None:
+        import time
         if shutil.which("arecord"):
-            cmd = ["arecord", "-D", self.alsa_device, "-f", "S16_LE", "-r", str(self.sample_rate), "-c", "1", "-t", "raw", "-q"]
-            try:
-                self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-                while self._recording and self._proc and self._proc.poll() is None:
-                    if self._proc.stdout:
-                        chunk = self._proc.stdout.read(2560)
-                        if chunk:
-                            try:
-                                self._queue.put_nowait(chunk)
-                            except queue.Full:
+            # Try Mono first
+            channels = "1"
+            downmix = False
+            
+            while self._recording:
+                cmd = ["arecord", "-D", self.alsa_device, "-f", "S16_LE", "-r", str(self.sample_rate), "-c", channels, "-t", "raw", "-q"]
+                try:
+                    self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+                    time.sleep(0.5) # Give it time to fail if channels are wrong
+                    
+                    if self._proc.poll() is not None:
+                        err = self._proc.stderr.read().decode('utf-8', errors='ignore') if self._proc.stderr else ""
+                        logger.warning(f"arecord -c {channels} failed: {err.strip()}")
+                        if channels == "1":
+                            logger.info("Retrying with -c 2 (Stereo) and software downmixing...")
+                            channels = "2"
+                            downmix = True
+                            continue
+                        else:
+                            logger.error("arecord failed even with 2 channels. Mic disabled.")
+                            break
+
+                    logger.info(f"arecord running successfully with {channels} channel(s).")
+                    while self._recording and self._proc and self._proc.poll() is None:
+                        if self._proc.stdout:
+                            # Read appropriate chunk size based on channels
+                            chunk = self._proc.stdout.read(2560 if not downmix else 5120)
+                            if chunk:
+                                if downmix:
+                                    # Fast stereo to mono downmix using memoryview
+                                    try:
+                                        stereo = memoryview(chunk).cast('h')
+                                        chunk = stereo[0::2].tobytes()
+                                    except Exception:
+                                        pass # In case of misaligned bytes at the end
+                                        
                                 try:
-                                    self._queue.get_nowait()
-                                except queue.Empty:
-                                    pass
-                                self._queue.put_nowait(chunk)
-            except Exception as e:
-                logger.error(f"arecord error: {e}")
+                                    self._queue.put_nowait(chunk)
+                                except queue.Full:
+                                    try:
+                                        self._queue.get_nowait()
+                                    except queue.Empty:
+                                        pass
+                                    self._queue.put_nowait(chunk)
+                except Exception as e:
+                    logger.error(f"arecord error: {e}")
+                    break
         else:
             logger.warning("arecord not available on system.")
 
