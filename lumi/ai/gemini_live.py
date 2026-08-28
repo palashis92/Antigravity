@@ -158,7 +158,7 @@ class GeminiLiveClient:
                     "speechConfig": {
                         "voiceConfig": {
                             "prebuiltVoiceConfig": {
-                                "voiceName": "Aoede"
+                                "voiceName": "Kore"
                             }
                         }
                     }
