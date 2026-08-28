@@ -8,7 +8,7 @@ import sys
 import time
 from pathlib import Path
 
-from .audio.mic import MicInterface, PhoneMicBackend, ReSpeakerMicBackend
+from .audio.mic import MicInterface, SystemMicBackend
 from .audio.speaker import I2SSpeakerBackend, SpeakerInterface
 from .config import LumiSettings, load_settings
 from .core.event_bus import EventBus
@@ -113,12 +113,7 @@ class LumiApplication:
         self.camera = CameraInterface(camera_backend)
 
         # 3d. Microphone Backend
-        if settings.audio.mic_backend in ("system", "alsa"):
-            from .audio.mic import SystemMicBackend
-            mic_backend = SystemMicBackend(sample_rate=settings.audio.sample_rate)
-        elif settings.audio.mic_backend in ("lan_mic", "phone"):
-            mic_backend = PhoneMicBackend(stream_url=settings.audio.phone_audio_url)
-        elif settings.audio.mic_backend == "respeaker":
+        if settings.audio.mic_backend != "mock":
             mic_backend = SystemMicBackend(sample_rate=settings.audio.sample_rate)
         else:
             mic_backend = MockMicBackend()
