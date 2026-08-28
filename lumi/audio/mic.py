@@ -65,12 +65,19 @@ class SystemMicBackend(MicBackendBase):
                             chunk = self._proc.stdout.read(2560 if not downmix else 5120)
                             if chunk:
                                 if downmix:
+                                    # Ensure chunk is multiple of 4 bytes (2 channels * 2 bytes/sample)
+                                    remainder = len(chunk) % 4
+                                    if remainder != 0:
+                                        chunk = chunk[:-remainder]
+                                        
                                     # Fast stereo to mono downmix using memoryview
                                     try:
-                                        stereo = memoryview(chunk).cast('h')
-                                        chunk = stereo[0::2].tobytes()
-                                    except Exception:
-                                        pass # In case of misaligned bytes at the end
+                                        if len(chunk) > 0:
+                                            stereo = memoryview(chunk).cast('h')
+                                            chunk = stereo[0::2].tobytes()
+                                    except Exception as e:
+                                        logger.warning(f"Downmix error: {e}")
+                                        pass
                                         
                                 try:
                                     self._queue.put_nowait(chunk)

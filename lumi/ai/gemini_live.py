@@ -234,6 +234,7 @@ class GeminiLiveClient:
         # Keep awake forever
         self._awake = True
         self._audio_queue = asyncio.Queue(maxsize=100)
+        _debug_chunk_count = 0
         try:
             while self._running:
                 try:
@@ -256,6 +257,9 @@ class GeminiLiveClient:
                                     }
                                 }
                             }))
+                            _debug_chunk_count += 1
+                            if _debug_chunk_count % 100 == 0:
+                                logger.info(f"Streamed {_debug_chunk_count} audio chunks to Gemini.")
                         except Exception:
                             break
                         

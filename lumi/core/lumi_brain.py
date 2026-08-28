@@ -186,6 +186,7 @@ class LumiBrain:
     def _audio_loop(self) -> None:
         logger.info("Starting Audio Loop (Streaming to Gemini Live)")
         ENERGY_THRESHOLD = 400
+        _debug_audio_frames = 0
         
         while self._running:
             chunk = self.mic.read_chunk(1024)
@@ -198,6 +199,10 @@ class LumiBrain:
                 self.realtime_voice.push_audio_chunk(chunk)
 
             energy = self._compute_rms(chunk)
+            _debug_audio_frames += 1
+            if _debug_audio_frames % 200 == 0:
+                logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
+
             if energy > ENERGY_THRESHOLD:
                 if self.state.current_state == BehaviorState.IDLE:
                     self.eyes.set_expression("curious")
