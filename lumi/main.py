@@ -119,7 +119,7 @@ class LumiApplication:
         elif settings.audio.mic_backend in ("lan_mic", "phone"):
             mic_backend = PhoneMicBackend(stream_url=settings.audio.phone_audio_url)
         elif settings.audio.mic_backend == "respeaker":
-            mic_backend = ReSpeakerMicBackend(sample_rate=settings.audio.sample_rate)
+            mic_backend = SystemMicBackend(sample_rate=settings.audio.sample_rate)
         else:
             mic_backend = MockMicBackend()
         self.mic = MicInterface(mic_backend)

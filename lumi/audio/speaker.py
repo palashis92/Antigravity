@@ -20,7 +20,7 @@ logger = get_logger("audio.speaker")
 class I2SSpeakerBackend(SpeakerBackendBase):
     """Plays audio via MAX98357A I2S Mono DAC/Amp on Raspberry Pi 5 with auto format conversion."""
 
-    def __init__(self, alsa_device: str = "plughw:1,0", volume: int = 85) -> None:
+    def __init__(self, alsa_device: str = "default", volume: int = 85) -> None:
         import queue
         self.alsa_device = alsa_device
         self.volume = volume
@@ -31,7 +31,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             target=self._stream_worker_loop, daemon=True, name="I2SStreamWorker"
         )
         self._stream_thread.start()
-        self._detect_alsa_device()
+        logger.info(f"Speaker initialized on ALSA device {self.alsa_device}")
 
     def _stream_worker_loop(self) -> None:
         """Background worker thread feeding streaming audio chunks to a persistent aplay process."""
