@@ -38,6 +38,9 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         import queue
         proc = None
         current_sample_rate = 24000
+        channels = "1"
+        upmix_to_stereo = False
+        
         while self._stream_running:
             try:
                 try:
@@ -45,32 +48,48 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                 except queue.Empty:
                     if proc is not None:
                         try:
-                            if proc.stdin:
-                                proc.stdin.close()
+                            if proc.stdin: proc.stdin.close()
                             proc.wait(timeout=0.1)
-                        except Exception:
-                            pass
+                        except Exception: pass
                         proc = None
                     continue
 
                 if proc is None or proc.poll() is not None or current_sample_rate != sample_rate:
                     if proc is not None:
+                        if proc.poll() is not None and proc.stderr:
+                            err = proc.stderr.read().decode('utf-8', errors='ignore')
+                            if "Channels count non available" in err or "channels" in err.lower():
+                                logger.warning(f"aplay -c {channels} failed. Switching to Stereo upmixing...")
+                                channels = "2"
+                                upmix_to_stereo = True
                         try:
-                            if proc.stdin:
-                                proc.stdin.close()
+                            if proc.stdin: proc.stdin.close()
                             proc.terminate()
-                        except Exception:
-                            pass
+                        except Exception: pass
+                        
                     current_sample_rate = sample_rate
                     if shutil.which("aplay"):
                         proc = subprocess.Popen(
-                            ["aplay", "-D", self.alsa_device, "-f", "S16_LE", "-r", str(sample_rate), "-c", "1"],
+                            ["aplay", "-D", self.alsa_device, "-f", "S16_LE", "-r", str(sample_rate), "-c", channels],
                             stdin=subprocess.PIPE,
                             stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
+                            stderr=subprocess.PIPE,
+                            text=False
                         )
 
                 if proc and proc.stdin:
+                    if upmix_to_stereo:
+                        try:
+                            import audioop
+                            audio_bytes = audioop.tostereo(audio_bytes, 2, 1, 1)
+                        except ImportError:
+                            # Fast manual upmix: double each 16-bit sample [L] -> [L, L]
+                            stereo_bytes = bytearray()
+                            for i in range(0, len(audio_bytes), 2):
+                                stereo_bytes.extend(audio_bytes[i:i+2])
+                                stereo_bytes.extend(audio_bytes[i:i+2])
+                            audio_bytes = bytes(stereo_bytes)
+                            
                     proc.stdin.write(audio_bytes)
                     proc.stdin.flush()
             except Exception as e:

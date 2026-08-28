@@ -59,22 +59,35 @@ class SystemMicBackend(MicBackendBase):
                             break
 
                     logger.info(f"arecord running successfully with {channels} channel(s).")
+                    
+                    leftover = b""
+                    
                     while self._recording and self._proc and self._proc.poll() is None:
                         if self._proc.stdout:
                             # Read appropriate chunk size based on channels
-                            chunk = self._proc.stdout.read(2560 if not downmix else 5120)
+                            chunk = self._proc.stdout.read(4096)
                             if chunk:
                                 if downmix:
+                                    chunk = leftover + chunk
                                     # Ensure chunk is multiple of 4 bytes (2 channels * 2 bytes/sample)
                                     remainder = len(chunk) % 4
                                     if remainder != 0:
+                                        leftover = chunk[-remainder:]
                                         chunk = chunk[:-remainder]
+                                    else:
+                                        leftover = b""
                                         
-                                    # Fast stereo to mono downmix using memoryview
                                     try:
                                         if len(chunk) > 0:
-                                            stereo = memoryview(chunk).cast('h')
-                                            chunk = stereo[0::2].tobytes()
+                                            # Try audioop for proper stereo-to-mono mixing (handles both channels)
+                                            try:
+                                                import audioop
+                                                chunk = audioop.tomono(chunk, 2, 1, 1)
+                                            except ImportError:
+                                                # Fallback to slicing if audioop is missing (Python 3.13+)
+                                                # We take Left channel. If user needs Right, this might fail, but it's fast.
+                                                stereo = memoryview(chunk).cast('h')
+                                                chunk = stereo[0::2].tobytes()
                                     except Exception as e:
                                         logger.warning(f"Downmix error: {e}")
                                         pass
