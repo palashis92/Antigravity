@@ -376,11 +376,35 @@ class GeminiLiveClient:
             logger.warning(f"Gemini receive loop Exception: {e}. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")
 
     def inject_context(self, text: str) -> None:
-        if not self._ws or not self._awake: return
-        event = {
-            "realtimeInput": {
-                "text": text
+        if not self._awake: return
+        
+        async def _send_when_ready() -> None:
+            # Wait up to 10 seconds for websocket to be ready
+            for _ in range(100):
+                if getattr(self, "_is_ready", False) and getattr(self, "_ws", None):
+                    break
+                await asyncio.sleep(0.1)
+                
+            ws = getattr(self, "_ws", None)
+            if not ws or not getattr(self, "_is_ready", False):
+                logger.warning("Dropped context injection: WS not ready.")
+                return
+                
+            event = {
+                "clientContent": {
+                    "turns": [
+                        {
+                            "role": "user",
+                            "parts": [{"text": text}]
+                        }
+                    ],
+                    "turnComplete": True
+                }
             }
-        }
+            try:
+                await ws.send(json.dumps(event))
+            except Exception as e:
+                logger.warning(f"Failed to inject context: {e}")
+
         if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._ws.send(json.dumps(event)), self._loop)
+            asyncio.run_coroutine_threadsafe(_send_when_ready(), self._loop)
