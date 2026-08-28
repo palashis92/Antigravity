@@ -42,7 +42,7 @@ motion:
   arms_enabled: true
 
 vision:
-  camera_backend: "none"  # Deactivated until physical Pi Camera is connected
+  camera_backend: "picamera"
   phone_video_url: ""
   frame_width: 640
   frame_height: 480

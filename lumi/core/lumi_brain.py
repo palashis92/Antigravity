@@ -79,12 +79,12 @@ class LumiBrain:
 
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
-        self.tools.register("memorize_person", self._tool_memorize_person, "Remember the name of the unknown person you are talking to.", {
+        self.tools.register("memorize_person", self._tool_memorize_person, "CALL THIS ONLY when the user explicitly introduces themselves (e.g., 'My name is X') or asks you to remember their name. Do NOT call this for random names or entities mentioned in conversation.", {
             "type": "object", "properties": {"name": {"type": "string", "description": "The person's name."}}, "required": ["name"]
         })
         self.tools.register("analyze_plant", self._tool_analyze_plant, "Analyze the plant the camera is seeing.")
         self.tools.register("analyze_chess", self._tool_analyze_chess, "Analyze the chessboard the camera is seeing.")
-        self.tools.register("perform_gesture", self._tool_perform_gesture, "Perform a physical gesture.", {
+        self.tools.register("perform_gesture", self._tool_perform_gesture, "Perform a physical gesture. CALL THIS SPARINGLY, only when highly appropriate to the context (e.g., waving when saying goodbye). Do NOT call this continuously.", {
             "type": "object", "properties": {"gesture_name": {"type": "string", "enum": ["greet", "thinking", "wave", "happy", "sad"]}}, "required": ["gesture_name"]
         })
         self.tools.register("move_servo", self._tool_move_servo, "Move a specific servo.", {
