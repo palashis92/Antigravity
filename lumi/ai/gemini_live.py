@@ -219,11 +219,16 @@ class GeminiLiveClient:
         return False
 
     def push_audio_chunk(self, chunk: bytes) -> None:
-        if hasattr(self, "_audio_queue") and self._audio_queue and getattr(self, "_awake", False):
-            try:
-                self._audio_queue.put_nowait(chunk)
-            except asyncio.QueueFull:
-                pass
+        if not hasattr(self, "_audio_queue") or not self._audio_queue:
+            return
+        if not getattr(self, "_awake", False):
+            return
+        if not self._loop or not self._loop.is_running():
+            return
+        try:
+            self._loop.call_soon_threadsafe(self._audio_queue.put_nowait, chunk)
+        except (asyncio.QueueFull, RuntimeError):
+            pass
 
     async def _send_av_loop(self, ws: Any) -> None:
         # Keep awake forever
