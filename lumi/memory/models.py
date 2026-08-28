@@ -37,6 +37,17 @@ class Person:
     notes: str = ""
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def face_embedding(self) -> Optional[List[float]]:
+        return self.metadata.get("face_embedding")
+
+    @face_embedding.setter
+    def face_embedding(self, value: Optional[List[float]]) -> None:
+        if value is None:
+            self.metadata.pop("face_embedding", None)
+        else:
+            self.metadata["face_embedding"] = value
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["consent_status"] = self.consent_status.value
