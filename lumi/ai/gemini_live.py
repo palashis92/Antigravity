@@ -328,14 +328,19 @@ class GeminiLiveClient:
                     # Sometimes transcriptions arrive outside modelTurn (e.g. BidiGenerateContentServerMessage)
                     if "serverContent" in data:
                         content = data["serverContent"]
+                        
+                        def _get_text(t: Any) -> str:
+                            if isinstance(t, dict): return t.get("text", "")
+                            return str(t)
+                            
                         if "inputAudioTranscription" in content:
-                            print(f"👤 [USER]: {content['inputAudioTranscription']}")
+                            print(f"👤 [USER]: {_get_text(content['inputAudioTranscription'])}")
                         if "outputAudioTranscription" in content:
-                            print(f"🤖 [LUMI (Draft)]: {content['outputAudioTranscription']}")
+                            print(f"🤖 [LUMI (Draft)]: {_get_text(content['outputAudioTranscription'])}")
                         if "inputTranscription" in content:
-                            print(f"👤 [USER]: {content['inputTranscription']}")
+                            print(f"👤 [USER]: {_get_text(content['inputTranscription'])}")
                         if "outputTranscription" in content:
-                            print(f"🤖 [LUMI (Draft)]: {content['outputTranscription']}")
+                            print(f"🤖 [LUMI (Draft)]: {_get_text(content['outputTranscription'])}")
                             
                     # Handle Tool Calls
                     if "toolCall" in data:

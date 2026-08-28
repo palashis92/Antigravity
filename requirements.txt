@@ -8,6 +8,7 @@ pillow>=10.0
 
 # AI & Conversation (Inworld.ai + OpenAI Whisper STT)
 openai>=1.0
+google-genai>=0.2.0
 
 # Vision
 opencv-python>=4.8
