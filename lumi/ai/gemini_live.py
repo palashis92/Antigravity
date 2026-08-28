@@ -258,8 +258,6 @@ class GeminiLiveClient:
                                 }
                             }))
                             _debug_chunk_count += 1
-                            if _debug_chunk_count % 100 == 0:
-                                logger.info(f"Streamed {_debug_chunk_count} audio chunks to Gemini.")
                         except Exception:
                             break
                         

@@ -36,62 +36,29 @@ class SystemMicBackend(MicBackendBase):
     def _reader_loop(self) -> None:
         import time
         if shutil.which("arecord"):
-            # Try Mono first
             channels = "1"
-            downmix = False
+            
+            # If the device is just "default", wrap it in "plug:" so ALSA handles the 
+            # stereo-to-mono downmix natively at the hardware driver level, instead of Python.
+            device = "plug:default" if self.alsa_device == "default" else self.alsa_device
             
             while self._recording:
-                cmd = ["arecord", "-D", self.alsa_device, "-f", "S16_LE", "-r", str(self.sample_rate), "-c", channels, "-t", "raw", "-q"]
+                cmd = ["arecord", "-D", device, "-f", "S16_LE", "-r", str(self.sample_rate), "-c", channels, "-t", "raw", "-q"]
                 try:
                     self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
-                    time.sleep(0.5) # Give it time to fail if channels are wrong
+                    time.sleep(0.5)
                     
                     if self._proc.poll() is not None:
                         err = self._proc.stderr.read().decode('utf-8', errors='ignore') if self._proc.stderr else ""
-                        logger.warning(f"arecord -c {channels} failed: {err.strip()}")
-                        if channels == "1":
-                            logger.info("Retrying with -c 2 (Stereo) and software downmixing...")
-                            channels = "2"
-                            downmix = True
-                            continue
-                        else:
-                            logger.error("arecord failed even with 2 channels. Mic disabled.")
-                            break
+                        logger.error(f"arecord failed: {err.strip()}")
+                        break
 
-                    logger.info(f"arecord running successfully with {channels} channel(s).")
-                    
-                    leftover = b""
+                    logger.info(f"arecord running successfully via ALSA native mono ({device}).")
                     
                     while self._recording and self._proc and self._proc.poll() is None:
                         if self._proc.stdout:
-                            # Read appropriate chunk size based on channels
                             chunk = self._proc.stdout.read(4096)
                             if chunk:
-                                if downmix:
-                                    chunk = leftover + chunk
-                                    # Ensure chunk is multiple of 4 bytes (2 channels * 2 bytes/sample)
-                                    remainder = len(chunk) % 4
-                                    if remainder != 0:
-                                        leftover = chunk[-remainder:]
-                                        chunk = chunk[:-remainder]
-                                    else:
-                                        leftover = b""
-                                        
-                                    try:
-                                        if len(chunk) > 0:
-                                            # Try audioop for proper stereo-to-mono mixing (handles both channels)
-                                            try:
-                                                import audioop
-                                                chunk = audioop.tomono(chunk, 2, 1, 1)
-                                            except ImportError:
-                                                # Fallback to slicing if audioop is missing (Python 3.13+)
-                                                # We take Left channel. If user needs Right, this might fail, but it's fast.
-                                                stereo = memoryview(chunk).cast('h')
-                                                chunk = stereo[0::2].tobytes()
-                                    except Exception as e:
-                                        logger.warning(f"Downmix error: {e}")
-                                        pass
-                                        
                                 try:
                                     self._queue.put_nowait(chunk)
                                 except queue.Full:
