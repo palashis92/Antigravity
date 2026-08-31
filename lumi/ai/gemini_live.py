@@ -84,10 +84,13 @@ class GeminiLiveClient:
 
     def stop(self) -> None:
         self._running = False
+        if getattr(self, "_ws", None):
+            pass
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            for task in asyncio.all_tasks(self._loop):
+                self._loop.call_soon_threadsafe(task.cancel)
         if self._thread:
-            self._thread.join(timeout=1.0)
+            self._thread.join(timeout=2.0)
         logger.info("Gemini Live Engine stopped.")
 
     def _run_event_loop(self) -> None:
@@ -95,10 +98,21 @@ class GeminiLiveClient:
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._main_task())
-        except Exception as e:
+        except (Exception, asyncio.CancelledError) as e:
             logger.debug(f"Gemini loop exited: {e}")
         finally:
+            pending = asyncio.all_tasks(self._loop)
+            for t in pending:
+                t.cancel()
+            if pending:
+                self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            try:
+                self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            except Exception:
+                pass
             self._loop.close()
+            self._loop = None
+            self._thread = None
 
     async def _main_task(self) -> None:
         url = f"wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent?key={self.api_key}"

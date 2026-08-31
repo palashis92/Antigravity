@@ -48,7 +48,7 @@ class SystemMicBackend(MicBackendBase):
                     self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
                     time.sleep(0.5)
                     
-                    if self._proc.poll() is not None:
+                    if self._proc is not None and self._proc.poll() is not None:
                         err = self._proc.stderr.read().decode('utf-8', errors='ignore') if self._proc.stderr else ""
                         logger.error(f"arecord failed: {err.strip()}")
                         break

@@ -433,9 +433,10 @@ class LumiBrain:
         all_results = local_results + cloud_results
         
         if not all_results:
-            return "No relevant facts found in memory."
+            return f"No relevant facts found in memory for {person.name if person else 'this person'}."
             
-        result = "Memories retrieved:\n" + "\n".join(all_results)
+        result = f"Memories retrieved about {person.name if person else 'User'}:\n" + "\n".join(all_results)
+        result += "\n(Note: Pay close attention to who is doing what in these memories. Distinguish between the user and their friends/family.)"
         return result
 
     def _tool_describe_vision(self) -> str:
