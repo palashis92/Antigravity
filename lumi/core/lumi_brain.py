@@ -101,8 +101,8 @@ class LumiBrain:
         self.tools.register("update_contact_info", self._tool_update_contact_info, "Save or update a person's name, phone, and address.", {
             "type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string"}, "address": {"type": "string"}}, "required": ["name"]
         })
-        self.tools.register("save_event_reminder", self._tool_save_event_reminder, "Save an event or reminder to memory.", {
-            "type": "object", "properties": {"title": {"type": "string"}, "description": {"type": "string"}, "date_time": {"type": "string"}}, "required": ["title", "date_time"]
+        self.tools.register("set_reminder", self._tool_set_reminder, "Set a time-based reminder. You MUST provide the time in ISO 8601 format (YYYY-MM-DDThh:mm:ss). Calculate this based on the current time provided in your system instructions.", {
+            "type": "object", "properties": {"title": {"type": "string", "description": "Short title of the reminder"}, "description": {"type": "string", "description": "Optional details"}, "remind_at_iso": {"type": "string", "description": "ISO 8601 formatted datetime string"}}, "required": ["title", "remind_at_iso"]
         })
         self.tools.register("send_email", self._tool_send_email, "Send an email.", {
             "type": "object", "properties": {"to_address": {"type": "string"}, "subject": {"type": "string"}, "message": {"type": "string"}}, "required": ["to_address", "subject", "message"]
@@ -181,17 +181,20 @@ class LumiBrain:
             self.gestures.play_async(self.gestures.idle_alive_motion, name="idle_wander")
 
     def _on_reminder_due(self, event: Event) -> None:
-        reminder_data = event.data.get("reminder")
-        if not reminder_data:
-            return
-        reminder_text = reminder_data.get("reminder_text", "")
-        self.state.transition_to(BehaviorState.SPEAKING, reason="reminder_triggered")
-        self.eyes.set_expression("thinking")
-        speech_text = f"একটি রিমাইন্ডার রয়েছে: {reminder_text}"
-        audio_path = self.tts.synthesize(speech_text)
-        if audio_path:
-            self.speaker.play_file(audio_path, block=True)
-        self.state.transition_to(BehaviorState.IDLE, reason="reminder_delivered")
+        title = event.data.get("title", "")
+        desc = event.data.get("description", "")
+        
+        if hasattr(self, "realtime_voice") and self.realtime_voice._running:
+            prompt = f"[SYSTEM ALERT: A reminder scheduled by the user is due RIGHT NOW. Title: '{title}'. Description: '{desc}'. Please notify the user about this reminder enthusiastically and naturally in Bangla immediately.]"
+            self.realtime_voice.inject_context(prompt)
+        else:
+            self.state.transition_to(BehaviorState.SPEAKING, reason="reminder_triggered")
+            self.eyes.set_expression("thinking")
+            speech_text = f"একটি রিমাইন্ডার রয়েছে: {title}. {desc}"
+            audio_path = self.tts.synthesize(speech_text)
+            if audio_path:
+                self.speaker.play_file(audio_path, block=True)
+            self.state.transition_to(BehaviorState.IDLE, reason="reminder_delivered")
 
     def _on_face_detected(self, event: Event) -> None:
         person_data = event.data.get("person")
@@ -532,12 +535,19 @@ class LumiBrain:
             return f"Updated contact info for {name}. Phone: {phone}, Address: {address}."
         return "Failed to find or create person."
 
-    def _tool_save_event_reminder(self, title: str, description: str = "", date_time: str = "") -> str:
-        self.memory.remember_fact(
-            fact_text=f"Event: {title} on {date_time}. Details: {description}",
-            category="event"
-        )
-        return "Event successfully saved to memory."
+    def _tool_set_reminder(self, title: str, remind_at_iso: str, description: str = "") -> str:
+        person = getattr(self, "active_person", None)
+        person_id = person.id if person else None
+        try:
+            self.memory.create_reminder(
+                title=title,
+                remind_at_iso=remind_at_iso,
+                person_id=person_id,
+                description=description
+            )
+            return f"Reminder successfully scheduled for {remind_at_iso}."
+        except Exception as e:
+            return f"Failed to set reminder: {e}"
 
     def _tool_send_email(self, to_address: str, subject: str, message: str) -> str:
         logger.info(f"Mock sending Email to {to_address} with subject '{subject}': {message}")

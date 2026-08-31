@@ -159,7 +159,9 @@ class GeminiLiveClient:
 
     async def _send_setup(self, ws: Any) -> None:
         from .prompts import LUMI_SYSTEM_PROMPT_BN
-        instructions = LUMI_SYSTEM_PROMPT_BN
+        import datetime
+        now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        instructions = LUMI_SYSTEM_PROMPT_BN + f"\n\n[SYSTEM: The current date and time is {now_str}. Use this for all relative time calculations, especially when creating reminders in ISO 8601 format.]"
         
         setup_msg: Dict[str, Any] = {
             "setup": {
