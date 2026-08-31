@@ -55,9 +55,10 @@ class SystemMicBackend(MicBackendBase):
 
                     logger.info(f"arecord running successfully via ALSA native mono ({device}).")
                     
-                    while self._recording and self._proc and self._proc.poll() is None:
-                        if self._proc.stdout:
-                            chunk = self._proc.stdout.read(4096)
+                    proc = self._proc
+                    while self._recording and proc and proc.poll() is None:
+                        if proc.stdout:
+                            chunk = proc.stdout.read(4096)
                             if chunk:
                                 try:
                                     self._queue.put_nowait(chunk)

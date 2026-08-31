@@ -222,6 +222,11 @@ class GeminiLiveClient:
             return
         if not self._loop or not self._loop.is_running():
             return
+            
+        # Software AEC (Echo Prevention): Drop mic chunks while speaker is playing
+        if time.time() < getattr(self, "_speaker_active_until", 0):
+            return
+            
         try:
             self._loop.call_soon_threadsafe(self._audio_queue.put_nowait, chunk)
         except (asyncio.QueueFull, RuntimeError):
@@ -312,8 +317,18 @@ class GeminiLiveClient:
                             for part in model_turn.get("parts", []):
                                 if "inlineData" in part:
                                     audio_bytes = base64.b64decode(part["inlineData"]["data"])
-                                    # logger.info(f"Received {len(audio_bytes)} bytes of audio from Gemini!")
                                     self._last_active_time = time.time()
+                                    
+                                    # Calculate audio duration: PCM 24000Hz 16-bit Mono = 48000 bytes/sec
+                                    # Add 0.5s padding for hardware latency and room reverb
+                                    duration = len(audio_bytes) / 48000.0
+                                    current_until = getattr(self, "_speaker_active_until", 0)
+                                    now = time.time()
+                                    if current_until > now:
+                                        self._speaker_active_until = current_until + duration
+                                    else:
+                                        self._speaker_active_until = now + duration + 0.5
+                                        
                                     self.speaker.play_stream(audio_bytes, sample_rate=24000)
                                 elif "text" in part:
                                     txt = part["text"]
