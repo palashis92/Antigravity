@@ -80,7 +80,13 @@ class LumiBrain:
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
         self.tools.register("memorize_person", self._tool_memorize_person, "CALL THIS ONLY when the user explicitly introduces themselves (e.g., 'My name is X') or asks you to remember their name. Do NOT call this for random names or entities mentioned in conversation.", {
-            "type": "object", "properties": {"name": {"type": "string", "description": "The person's name."}}, "required": ["name"]
+            "type": "object", 
+            "properties": {
+                "name": {"type": "string", "description": "The person's full name."},
+                "relationship": {"type": "string", "description": "Their relationship to Palash (the owner), e.g. friend, brother, guest."},
+                "notes": {"type": "string", "description": "Any short important facts or details to remember about them."}
+            }, 
+            "required": ["name"]
         })
         self.tools.register("analyze_plant", self._tool_analyze_plant, "Analyze the plant the camera is seeing.")
         self.tools.register("analyze_chess", self._tool_analyze_chess, "Analyze the chessboard the camera is seeing.")
@@ -280,7 +286,15 @@ class LumiBrain:
                 self.gestures.play_async(self.gestures.greet, name="greet")
                 
                 if hasattr(self.realtime_voice, "inject_context"):
-                    prompt = f"You see {person.name} in front of you. Acknowledge them naturally in Bengali."
+                    # 10x Better Known Person Interaction
+                    relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
+                    notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
+                    prompt = (
+                        f"You just saw {person.name} ({relationship}). "
+                        f"Notes about them: {notes}. "
+                        "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
+                        "Do not mention their notes mechanically, but use the context if appropriate."
+                    )
                     self.realtime_voice.inject_context(prompt)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
         else:
@@ -291,34 +305,39 @@ class LumiBrain:
             if self.face_service.should_interact("unknown", cooldown_s=60.0):
                 self.eyes.set_expression("curious")
                 if hasattr(self.realtime_voice, "inject_context"):
-                    prompt = "A new person is here. Respond naturally and politely in Bengali."
+                    # 10x Better Unknown Person Interaction
+                    prompt = (
+                        "A new, unrecognized person just walked into your view. "
+                        "Act naturally curious! Greet them warmly in Bengali (বাংলা). "
+                        "Politely ask for their name, how they are related to Palash (your owner), "
+                        "and if they would like you to remember their face for next time. "
+                        "If they agree, use the 'memorize_person' tool with their details."
+                    )
                     self.realtime_voice.inject_context(prompt)
-
-
-
-
 
     # =========================================================================
     # Realtime Tools Implementation
     # =========================================================================
-    def _tool_memorize_person(self, name: str) -> str:
-        """Saves the pending unknown face with the given name."""
+    def _tool_memorize_person(self, name: str, relationship: str = "guest", notes: str = "") -> str:
+        """Saves the pending unknown face with detailed metadata."""
         encoding = self.face_service.get_pending_face()
         if not encoding:
-            return "No unknown face is currently in view to memorize."
+            return "No unknown face is currently in view to memorize. Please ask them to look at the camera."
         
         from ..memory.models import ConsentStatus
         self.memory.remember_person(
             name=name,
-            relationship="friend",
+            relationship=relationship,
             consent_status=ConsentStatus.GRANTED,
             preferred_language="bn"
         )
         person = self.memory.find_person_by_name(name)
         if person:
             person.face_embedding = encoding
+            if notes:
+                person.notes = notes
             self.memory.update_person(person)
-            return f"Successfully memorized the face of {name}."
+            return f"Successfully memorized the face of {name} ({relationship})."
         return f"Failed to save {name} to database."
 
     def _tool_describe_vision(self) -> str:
