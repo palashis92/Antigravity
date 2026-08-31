@@ -411,6 +411,14 @@ class LumiBrain:
             if person:
                 person_id = person.id
                 
+        # If no specific person requested, default to the person we're talking to (or owner)
+        if not person_id:
+            active = getattr(self, "active_person", None)
+            fallback = self.memory.find_person_by_name("Palash")
+            person = active or fallback
+            if person:
+                person_id = person.id
+                
         # 1. Check local SQLite memory
         local_facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
         local_results = [f"- {f.fact_text} (from {f.created_at[:10]})" for f in local_facts[:5]]

@@ -86,7 +86,10 @@ class SystemMicBackend(MicBackendBase):
         self._recording = False
         if self._proc is not None:
             try:
+                if self._proc.stdout: self._proc.stdout.close()
+                if self._proc.stderr: self._proc.stderr.close()
                 self._proc.terminate()
+                self._proc.wait(timeout=0.5)
             except Exception:
                 pass
             self._proc = None
