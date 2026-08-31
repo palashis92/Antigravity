@@ -144,11 +144,8 @@ class GeminiLiveClient:
         return schema
 
     async def _send_setup(self, ws: Any) -> None:
-        instructions = (
-            "You are LUMI, an intelligent and friendly AI companion robot. "
-            "You converse naturally, smoothly, and concisely in conversational Bengali (বাংলা) and English. "
-            "Directly answer user questions and engage politely in real-time."
-        )
+        from .prompts import LUMI_SYSTEM_PROMPT_BN
+        instructions = LUMI_SYSTEM_PROMPT_BN
         
         setup_msg: Dict[str, Any] = {
             "setup": {
@@ -371,17 +368,20 @@ class GeminiLiveClient:
                                     result = tool_func(**args)
                                 except Exception as e:
                                     result = f"Error: {e}"
+                            else:
+                                logger.warning(f"Gemini requested unknown tool: {name}")
+                                result = f"Error: Tool '{name}' is not available."
                                     
-                                resp = {
-                                    "toolResponse": {
-                                        "functionResponses": [{
-                                            "name": name,
-                                            "id": call_id,
-                                            "response": {"result": result}
-                                        }]
-                                    }
+                            resp = {
+                                "toolResponse": {
+                                    "functionResponses": [{
+                                        "name": name,
+                                        "id": call_id,
+                                        "response": {"result": result}
+                                    }]
                                 }
-                                await ws.send(json.dumps(resp))
+                            }
+                            await ws.send(json.dumps(resp))
                 except Exception as e:
                     logger.debug(f"Error parsing Gemini message: {e}")
             logger.warning(f"Gemini receive loop ended. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")
@@ -391,7 +391,6 @@ class GeminiLiveClient:
             logger.warning(f"Gemini receive loop Exception: {e}. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")
 
     def inject_context(self, text: str) -> None:
-        if not self._awake: return
         
         async def _send_when_ready() -> None:
             # Wait up to 10 seconds for websocket to be ready

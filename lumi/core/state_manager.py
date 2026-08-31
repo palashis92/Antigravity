@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from enum import Enum
 from typing import Callable, Dict, List, Optional, Set
 
@@ -135,6 +136,7 @@ class StateManager:
     """Manages the robot's lifecycle state, transitions, and state-change hooks."""
 
     def __init__(self, initial_state: BehaviorState = BehaviorState.IDLE) -> None:
+        self._lock = threading.RLock()
         self._current_state: BehaviorState = initial_state
         self._previous_state: Optional[BehaviorState] = None
         self._state_entered_time: float = time.time()
@@ -169,33 +171,34 @@ class StateManager:
 
     def transition_to(self, new_state: BehaviorState, reason: str = "") -> bool:
         """Attempt to transition to a new behavior state."""
-        if new_state == self._current_state:
-            return True
+        with self._lock:
+            if new_state == self._current_state:
+                return True
 
-        allowed = VALID_TRANSITIONS.get(self._current_state, set())
-        if new_state not in allowed:
-            logger.warning(
-                f"Invalid transition rejected: {self._current_state.value} -> {new_state.value} "
-                f"(reason: {reason})"
-            )
-            return False
+            allowed = VALID_TRANSITIONS.get(self._current_state, set())
+            if new_state not in allowed:
+                logger.warning(
+                    f"Invalid transition rejected: {self._current_state.value} -> {new_state.value} "
+                    f"(reason: {reason})"
+                )
+                return False
 
-        old_state = self._current_state
-        self._previous_state = old_state
-        self._current_state = new_state
-        self._state_entered_time = time.time()
-        self._history.append((new_state, self._state_entered_time))
-        if len(self._history) > 100:
-            self._history.pop(0)
+            old_state = self._current_state
+            self._previous_state = old_state
+            self._current_state = new_state
+            self._state_entered_time = time.time()
+            self._history.append((new_state, self._state_entered_time))
+            if len(self._history) > 100:
+                self._history.pop(0)
 
-        print(f"\n🧠 [LUMI STATE]: {old_state.name} ➡️ {new_state.name} ({reason})\n")
+            print(f"\n🧠 [LUMI STATE]: {old_state.name} ➡️ {new_state.name} ({reason})\n")
 
-        log_msg = f"State transition: {old_state.value} -> {new_state.value}"
-        if reason:
-            log_msg += f" (reason: {reason})"
-        logger.info(log_msg)
+            log_msg = f"State transition: {old_state.value} -> {new_state.value}"
+            if reason:
+                log_msg += f" (reason: {reason})"
+            logger.info(log_msg)
 
-        # Notify registered listeners
+        # Notify registered listeners outside lock to prevent deadlocks
         for listener in self._listeners:
             try:
                 listener(old_state, new_state)

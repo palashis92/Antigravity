@@ -90,6 +90,7 @@ class LumiBrain:
             "required": ["name"]
         })
         self.tools.register("analyze_plant", self._tool_analyze_plant, "Analyze the plant the camera is seeing.")
+        self.tools.register("describe_vision", self._tool_describe_vision, "Describe what you currently see through the camera. Use this when someone asks what you see, or when you want to comment on surroundings.")
         self.tools.register("analyze_chess", self._tool_analyze_chess, "Analyze the chessboard the camera is seeing.")
         self.tools.register("perform_gesture", self._tool_perform_gesture, "Perform a physical gesture. CALL THIS SPARINGLY, only when highly appropriate to the context (e.g., waving when saying goodbye). Do NOT call this continuously.", {
             "type": "object", "properties": {"gesture_name": {"type": "string", "enum": ["greet", "thinking", "wave", "happy", "sad"]}}, "required": ["gesture_name"]
@@ -159,14 +160,18 @@ class LumiBrain:
         self.event_bus.subscribe("conversation.turn_complete", self._on_turn_complete)
 
     def _on_turn_complete(self, event: Event) -> None:
-        if not self.active_person:
-            return
+        person = self.active_person
+        if not person:
+            # Fallback: attribute conversation to owner so memory is never lost
+            person = self.memory.find_person_by_name("Palash")
+            if not person:
+                return
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
         if u_text or l_text:
             self.mem0.process_conversation_turn_async(
-                person_id=self.active_person.id,
-                person_name=self.active_person.name,
+                person_id=person.id,
+                person_name=person.name,
                 user_text=u_text,
                 ai_text=l_text
             )
@@ -481,7 +486,7 @@ class LumiBrain:
 
     def _tool_move_servo(self, servo_name: str, angle: float) -> str:
         try:
-            self.servos.set_angle(servo_name, angle)
+            self.servo.move_joint(servo_name, angle)
             return f"Moved {servo_name} to {angle} degrees."
         except Exception as e:
             return f"Failed to move servo {servo_name}: {e}"
@@ -508,13 +513,11 @@ class LumiBrain:
             return f"Updated contact info for {name}. Phone: {phone}, Address: {address}."
         return "Failed to find or create person."
 
-    def _tool_save_event_reminder(self, title: str, description: str, date_time: str) -> str:
-        from ..memory.models import Fact
-        fact = Fact(
-            category="event",
-            fact_text=f"Event: {title} on {date_time}. Details: {description}"
+    def _tool_save_event_reminder(self, title: str, description: str = "", date_time: str = "") -> str:
+        self.memory.remember_fact(
+            fact_text=f"Event: {title} on {date_time}. Details: {description}",
+            category="event"
         )
-        self.memory.save_fact(fact)
         return "Event successfully saved to memory."
 
     def _tool_send_email(self, to_address: str, subject: str, message: str) -> str:
