@@ -108,6 +108,12 @@ class LumiBrain:
         self.tools.register("send_whatsapp", self._tool_send_whatsapp, "Send a WhatsApp message.", {
             "type": "object", "properties": {"phone_number": {"type": "string"}, "message": {"type": "string"}}, "required": ["phone_number", "message"]
         })
+        self.tools.register("memorize_fact", self._tool_memorize_fact, "Save a specific fact or detail about a person or event to long-term memory. Do this autonomously whenever you learn something important (e.g. user's hobbies, current tasks, preferences).", {
+            "type": "object", "properties": {"fact": {"type": "string", "description": "The fact to remember (e.g. 'Palash likes black coffee')."}, "person_name": {"type": "string", "description": "Optional name of the person this fact is about."}}, "required": ["fact"]
+        })
+        self.tools.register("recall_facts", self._tool_recall_facts, "Retrieve past facts from long-term memory about a person or topic.", {
+            "type": "object", "properties": {"search_query": {"type": "string", "description": "Keywords to search for."}, "person_name": {"type": "string", "description": "Optional name of the person."}}, "required": ["search_query"]
+        })
         
         from ..ai.gemini_live import GeminiLiveClient
         
@@ -289,11 +295,16 @@ class LumiBrain:
                     # 10x Better Known Person Interaction
                     relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
                     notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
+                    
+                    recent_facts = self.memory.recall_facts(person_id=person.id)
+                    fact_str = ", ".join([f.fact_text for f in recent_facts[:3]]) if recent_facts else "None"
+                    
                     prompt = (
                         f"You just saw {person.name} ({relationship}). "
                         f"Notes about them: {notes}. "
+                        f"Recent memories you saved about them: {fact_str}. "
                         "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
-                        "Do not mention their notes mechanically, but use the context if appropriate."
+                        "Do not mention their notes or memories mechanically, but use them naturally to ask how they are doing (e.g. 'Did you finish X?')."
                     )
                     self.realtime_voice.inject_context(prompt)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
@@ -339,6 +350,38 @@ class LumiBrain:
             self.memory.update_person(person)
             return f"Successfully memorized the face of {name} ({relationship})."
         return f"Failed to save {name} to database."
+
+    def _tool_memorize_fact(self, fact: str, person_name: Optional[str] = None) -> str:
+        """Autonomously remember a semantic fact."""
+        person_id = None
+        if person_name:
+            person = self.memory.find_person_by_name(person_name)
+            if person:
+                person_id = person.id
+            else:
+                return f"Person '{person_name}' not found. Cannot attach fact to them."
+        
+        saved_fact = self.memory.remember_fact(fact_text=fact, person_id=person_id)
+        if saved_fact:
+            return f"Fact memorized successfully: '{fact}'"
+        return "Failed to memorize fact due to privacy consent settings."
+
+    def _tool_recall_facts(self, search_query: str, person_name: Optional[str] = None) -> str:
+        """Recall saved facts from semantic memory."""
+        person_id = None
+        if person_name:
+            person = self.memory.find_person_by_name(person_name)
+            if person:
+                person_id = person.id
+                
+        facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
+        if not facts:
+            return "No relevant facts found in memory."
+        
+        result = "Memories retrieved:\n"
+        for i, f in enumerate(facts[:5]):
+            result += f"- {f.fact_text} (from {f.created_at[:10]})\n"
+        return result
 
     def _tool_describe_vision(self) -> str:
         """Describes what the robot currently sees via GPT-4 Vision API."""
