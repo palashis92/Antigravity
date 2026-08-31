@@ -33,6 +33,7 @@ from ..vision.camera import CameraInterface
 from ..vision.chess import ChessVision
 from ..vision.face import FaceRecognitionService
 from ..vision.plant import PlantDiseaseDetector
+from ..memory.mem0_engine import LumiMem0Engine
 
 logger = get_logger("core.brain")
 
@@ -132,6 +133,7 @@ class LumiBrain:
         self.chess_engine = ChessAnalysisEngine()
         self.reminders = ReminderScheduler(self.memory, self.event_bus)
         self.documents = PDFReportGenerator()
+        self.mem0 = LumiMem0Engine(self.memory)
 
         # Active interaction context
         self.active_person: Optional[Any] = None
@@ -145,6 +147,20 @@ class LumiBrain:
         self.event_bus.subscribe("reminder.due", self._on_reminder_due)
         self.event_bus.subscribe("vision.face_detected", self._on_face_detected)
         self.event_bus.subscribe("motion.idle_wander", self._on_idle_wander)
+        self.event_bus.subscribe("conversation.turn_complete", self._on_turn_complete)
+
+    def _on_turn_complete(self, event: Event) -> None:
+        if not self.active_person:
+            return
+        u_text = event.data.get("user", "")
+        l_text = event.data.get("lumi", "")
+        if u_text or l_text:
+            self.mem0.process_conversation_turn_async(
+                person_id=self.active_person.id,
+                person_name=self.active_person.name,
+                user_text=u_text,
+                ai_text=l_text
+            )
 
     def _on_idle_wander(self, event: Event) -> None:
         if self.state.current_state == BehaviorState.IDLE:

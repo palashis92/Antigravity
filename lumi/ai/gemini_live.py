@@ -290,6 +290,8 @@ class GeminiLiveClient:
 
     async def _receive_events(self, ws: Any) -> None:
         self._is_ready = False
+        user_buffer = []
+        lumi_buffer = []
         try:
             async for message in ws:
                 if not self._running: break
@@ -317,7 +319,9 @@ class GeminiLiveClient:
                                     self._last_active_time = time.time()
                                     self.speaker.play_stream(audio_bytes, sample_rate=24000)
                                 elif "text" in part:
-                                    print(f"🤖 [LUMI (Live)]: {part['text']}")
+                                    txt = part["text"]
+                                    print(f"🤖 [LUMI (Live)]: {txt}")
+                                    lumi_buffer.append(txt)
                                 
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
@@ -332,13 +336,26 @@ class GeminiLiveClient:
                             return str(t)
                             
                         if "inputAudioTranscription" in content:
-                            print(f"👤 [USER]: {_get_text(content['inputAudioTranscription'])}")
+                            txt = _get_text(content['inputAudioTranscription'])
+                            print(f"🗣️  [USER]: {txt}")
+                            if txt: user_buffer.append(txt)
                         if "outputAudioTranscription" in content:
                             print(f"🤖 [LUMI (Draft)]: {_get_text(content['outputAudioTranscription'])}")
                         if "inputTranscription" in content:
-                            print(f"👤 [USER]: {_get_text(content['inputTranscription'])}")
+                            txt = _get_text(content['inputTranscription'])
+                            print(f"🗣️  [USER]: {txt}")
+                            if txt: user_buffer.append(txt)
                         if "outputTranscription" in content:
                             print(f"🤖 [LUMI (Draft)]: {_get_text(content['outputTranscription'])}")
+
+                        # End of turn detection
+                        if content.get("turnComplete"):
+                            u_text = " ".join(user_buffer).strip()
+                            l_text = " ".join(lumi_buffer).strip()
+                            if u_text or l_text:
+                                self.event_bus.emit("conversation.turn_complete", data={"user": u_text, "lumi": l_text})
+                            user_buffer.clear()
+                            lumi_buffer.clear()
                             
                     # Handle Tool Calls
                     if "toolCall" in data:
