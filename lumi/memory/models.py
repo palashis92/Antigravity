@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 
 
 def utc_now_iso() -> str:
-    """Return current UTC time in ISO 8601 string format."""
-    return datetime.now(timezone.utc).isoformat()
+    """Return current local time in ISO 8601 string format (keeps name for compatibility)."""
+    return datetime.now().isoformat()
 
 
 class ConsentStatus(str, Enum):
