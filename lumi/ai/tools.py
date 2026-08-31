@@ -51,10 +51,8 @@ class ToolRegistry:
     def is_online(self) -> bool:
         """Quick check for active internet connection."""
         try:
-            # Use HTTP instead of HTTPS to avoid SSL hostname mismatch on raw IPs,
-            # or use a proper hostname like google.com
             import urllib.request
-            urllib.request.urlopen("http://1.1.1.1", timeout=2.0)
+            urllib.request.urlopen("http://clients3.google.com/generate_204", timeout=2.0)
             return True
         except Exception:
             return False

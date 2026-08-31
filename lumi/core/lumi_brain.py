@@ -411,13 +411,23 @@ class LumiBrain:
             if person:
                 person_id = person.id
                 
-        facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
-        if not facts:
-            return "No relevant facts found in memory."
+        # 1. Check local SQLite memory
+        local_facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
+        local_results = [f"- {f.fact_text} (from {f.created_at[:10]})" for f in local_facts[:5]]
         
-        result = "Memories retrieved:\n"
-        for i, f in enumerate(facts[:5]):
-            result += f"- {f.fact_text} (from {f.created_at[:10]})\n"
+        # 2. Check Mem0 Cloud (if active)
+        cloud_results = []
+        if hasattr(self, "mem0") and hasattr(self.mem0, "recall_facts_sync"):
+            cloud_str = self.mem0.recall_facts_sync(person_id=person_id or "default", query=search_query)
+            if cloud_str:
+                cloud_results.append(f"- {cloud_str}")
+                
+        all_results = local_results + cloud_results
+        
+        if not all_results:
+            return "No relevant facts found in memory."
+            
+        result = "Memories retrieved:\n" + "\n".join(all_results)
         return result
 
     def _tool_describe_vision(self) -> str:
