@@ -133,7 +133,16 @@ class LumiBrain:
         self.chess_engine = ChessAnalysisEngine()
         self.reminders = ReminderScheduler(self.memory, self.event_bus)
         self.documents = PDFReportGenerator()
-        self.mem0 = LumiMem0Engine(self.memory)
+        
+        # Dual-Mem0 System: Use Cloud API if key exists, otherwise use Local Gemini Engine
+        import os
+        from ..memory.mem0_cloud import Mem0CloudEngine
+        if os.environ.get("MEM0_API_KEY"):
+            logger.info("MEM0_API_KEY detected! Using official Mem0 Cloud API.")
+            self.mem0 = Mem0CloudEngine()
+        else:
+            logger.info("No MEM0_API_KEY found. Falling back to native LumiMem0 Engine.")
+            self.mem0 = LumiMem0Engine(self.memory)
 
         # Active interaction context
         self.active_person: Optional[Any] = None
@@ -312,8 +321,15 @@ class LumiBrain:
                     relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
                     notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
                     
-                    recent_facts = self.memory.recall_facts(person_id=person.id)
-                    fact_str = ", ".join([f.fact_text for f in recent_facts[:3]]) if recent_facts else "None"
+                    fact_str = "None"
+                    if hasattr(self.mem0, "recall_facts_sync"):
+                        # Official Mem0 Cloud API
+                        fact_str = self.mem0.recall_facts_sync(person.id)
+                    else:
+                        # Native SQLite Engine
+                        recent_facts = self.memory.recall_facts(person_id=person.id)
+                        if recent_facts:
+                            fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
                     
                     prompt = (
                         f"You just saw {person.name} ({relationship}). "
