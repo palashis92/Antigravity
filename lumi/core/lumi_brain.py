@@ -183,9 +183,33 @@ class LumiBrain:
     def _on_reminder_due(self, event: Event) -> None:
         title = event.data.get("title", "")
         desc = event.data.get("description", "")
+        remind_at = event.data.get("remind_at", "")
         
         if hasattr(self, "realtime_voice") and self.realtime_voice._running:
-            prompt = f"[SYSTEM ALERT: A reminder scheduled by the user is due RIGHT NOW. Title: '{title}'. Description: '{desc}'. Please notify the user about this reminder enthusiastically and naturally in Bangla immediately.]"
+            from datetime import datetime
+            import dateutil.parser
+            
+            prompt = f"[SYSTEM ALERT: A reminder scheduled by the user is due. Title: '{title}'. Description: '{desc}'.]"
+            
+            try:
+                # Check if it's late (e.g. system was offline)
+                # remind_at is from SQLite so it might be missing timezone, replace Z with +00:00 just in case
+                scheduled_time = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
+                # If naive, make it aware or vice versa? Let's just strip tzinfo for simple calculation 
+                # since both are local times based on our previous fix.
+                scheduled_time = scheduled_time.replace(tzinfo=None)
+                now = datetime.now()
+                diff_minutes = (now - scheduled_time).total_seconds() / 60.0
+                
+                if diff_minutes > 5:
+                    prompt = f"[SYSTEM ALERT: The user had a reminder scheduled for {remind_at} ('{title}'), but you were OFFLINE at that time. You just woke up. Apologize for missing the exact time and tell them the reminder now. Naturally in Bangla.]"
+                else:
+                    prompt = f"[SYSTEM ALERT: A reminder scheduled by the user is due RIGHT NOW. Title: '{title}'. Description: '{desc}'. Please notify the user about this reminder enthusiastically and naturally in Bangla immediately.]"
+            except Exception as e:
+                import logging
+                logging.getLogger("reminders").error(f"Error parsing reminder time: {e}")
+                pass
+                
             self.realtime_voice.inject_context(prompt)
         else:
             self.state.transition_to(BehaviorState.SPEAKING, reason="reminder_triggered")
