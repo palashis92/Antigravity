@@ -755,31 +755,14 @@ class LumiBrain:
             except Exception as e:
                 logger.error(f"Failed to synthesize audio: {e}")
 
-        # Display Animation via DuckDuckGo Search Library
-        img_path = os.path.join(assets_dir, f"{animal_lower}.gif")
-        
-        if not os.path.exists(img_path):
+        # Display Procedural Animation directly on the display
+        if hasattr(self.eyes, "show_procedural_animal"):
             try:
-                from duckduckgo_search import DDGS
-                logger.info(f"Using DDGS library to fetch {animal} GIF...")
-                results = DDGS().images(f"cute {animal} face animation gif", max_results=1)
-                if results and len(results) > 0:
-                    img_url = results[0]['image']
-                    req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    with urllib.request.urlopen(req, timeout=5) as response:
-                        with open(img_path, 'wb') as f:
-                            f.write(response.read())
+                self.eyes.show_procedural_animal(animal_lower, duration=4.0)
             except Exception as e:
-                logger.error(f"DDGS image search failed: {e}")
-                
-        # If we successfully downloaded or already had a GIF, play it
-        if os.path.exists(img_path) and hasattr(self.eyes, "play_animation"):
-            try:
-                self.eyes.play_animation(img_path, duration=5.0)
-            except Exception as e:
-                logger.error(f"Failed to play animation: {e}")
+                logger.error(f"Failed to play procedural animation: {e}")
                 
         if audio_found:
-            return f"Successfully displayed {animal} animation and played synthesized sound. Acknowledge this playfully."
+            return f"Successfully displayed procedural {animal} animation and played synthesized sound. Acknowledge this playfully."
         else:
-            return f"Successfully displayed {animal}. Make a cute {animal} sound with your voice now!"
+            return f"Successfully displayed procedural {animal} animation. Make a cute {animal} sound with your voice now!"

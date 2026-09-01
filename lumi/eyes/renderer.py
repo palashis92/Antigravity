@@ -172,6 +172,86 @@ class EyeRenderer:
         except Exception as e:
             logger.error(f"Failed to load animation {image_path}: {e}")
 
+    def show_procedural_animal(self, animal: str, duration: float = 4.0) -> None:
+        """Trigger a programmatic procedural animation of an animal."""
+        self._active_animal = animal
+        self._active_animal_start = time.time()
+        self._active_animal_end = time.time() + duration
+        logger.info(f"Playing procedural animation for {animal}")
+
+    def _draw_animal_frame(self, animal: str, elapsed: float):
+        from PIL import Image, ImageDraw
+        import math
+        img = Image.new('RGB', (self.width, self.height), (20, 20, 30))
+        draw = ImageDraw.Draw(img)
+        
+        animal = animal.lower()
+        
+        # Scaling factors for different screen sizes (default assumes 240x240)
+        sx = self.width / 240.0
+        sy = self.height / 240.0
+        def scale(coords):
+            return [c * sx if i % 2 == 0 else c * sy for i, c in enumerate(coords)]
+            
+        breathe = math.sin(elapsed * 4) * 2
+        
+        if animal == 'cat':
+            color = (255, 165, 0)
+            twitch = math.sin(elapsed * 15) * 5 if (elapsed % 2) < 0.5 else 0
+            draw.polygon(scale([40-twitch, 40+twitch, 80, 40, 60, 80+breathe]), fill=color)
+            draw.polygon(scale([200+twitch, 40+twitch, 160, 40, 180, 80+breathe]), fill=color)
+            
+            draw.ellipse(scale([40, 40-breathe, 200, 200+breathe]), fill=color)
+            draw.ellipse(scale([80, 90, 100, 120]), fill=(0,0,0))
+            draw.ellipse(scale([140, 90, 160, 120]), fill=(0,0,0))
+            
+            mouth_open = max(0, math.sin(elapsed * 12)) * 15
+            draw.ellipse(scale([110, 140, 130, 145 + mouth_open]), fill=(0,0,0))
+            
+            w_move = math.sin(elapsed * 10) * 3
+            draw.line(scale([20, 110-w_move, 60, 115]), fill=(255,255,255), width=int(3*sx))
+            draw.line(scale([20, 130+w_move, 60, 125]), fill=(255,255,255), width=int(3*sx))
+            draw.line(scale([220, 110-w_move, 180, 115]), fill=(255,255,255), width=int(3*sx))
+            draw.line(scale([220, 130+w_move, 180, 125]), fill=(255,255,255), width=int(3*sx))
+            
+        elif animal == 'dog':
+            color = (150, 100, 50)
+            flap = math.sin(elapsed * 10) * 10
+            draw.ellipse(scale([20, 40, 70, 160 + flap]), fill=(100, 60, 30))
+            draw.ellipse(scale([170, 40, 220, 160 + flap]), fill=(100, 60, 30))
+            
+            draw.ellipse(scale([40, 40-breathe, 200, 200+breathe]), fill=color)
+            draw.ellipse(scale([80, 90, 100, 120]), fill=(0,0,0))
+            draw.ellipse(scale([140, 90, 160, 120]), fill=(0,0,0))
+            
+            draw.ellipse(scale([100, 130, 140, 150]), fill=(0,0,0))
+            
+            bark_open = max(0, math.sin(elapsed * 15)) * 20
+            draw.ellipse(scale([105, 150, 135, 155 + bark_open]), fill=(50,0,0))
+            if bark_open > 10:
+                draw.ellipse(scale([110, 155, 130, 165 + bark_open]), fill=(255,100,100))
+
+        elif animal == 'bird':
+            color = (100, 200, 255)
+            draw.ellipse(scale([50, 50-breathe, 190, 190+breathe]), fill=color)
+            draw.ellipse(scale([85, 90, 105, 110]), fill=(0,0,0))
+            draw.ellipse(scale([135, 90, 155, 110]), fill=(0,0,0))
+            
+            chirp = max(0, math.sin(elapsed * 20)) * 15
+            draw.polygon(scale([90, 125, 150, 125, 120, 145 - chirp/2]), fill=(255, 200, 0))
+            draw.polygon(scale([95, 125+chirp, 145, 125+chirp, 120, 150 + chirp]), fill=(255, 180, 0))
+
+        else:
+            color = (150, 150, 150)
+            bounce = math.sin(elapsed * 8) * 10
+            draw.ellipse(scale([40, 40+bounce, 200, 200+bounce]), fill=color)
+            draw.ellipse(scale([80, 90+bounce, 100, 120+bounce]), fill=(0,0,0))
+            draw.ellipse(scale([140, 90+bounce, 160, 120+bounce]), fill=(0,0,0))
+            mouth_open = max(0, math.sin(elapsed * 10)) * 10
+            draw.ellipse(scale([110, 140+bounce, 130, 145+bounce + mouth_open]), fill=(0,0,0))
+            
+        return img
+
     def _render_loop(self) -> None:
         # Initialize animation state
         self._animation_frames = []
@@ -180,12 +260,32 @@ class EyeRenderer:
         self._animation_frame_time = 0.1
         self._last_frame_time = 0
         
+        self._active_animal = None
+        self._active_animal_end = 0
+        self._active_animal_start = 0
+        
         while self._running:
             loop_start = time.time()
             try:
                 now = time.time()
                 
-                # --- Animation Override ---
+                # --- Procedural Animal Override ---
+                if self._active_animal and now < self._active_animal_end:
+                    elapsed = now - self._active_animal_start
+                    frame = self._draw_animal_frame(self._active_animal, elapsed)
+                    if self.single_display_both_eyes:
+                        self.display.draw_eyes(frame, None)
+                    else:
+                        self.display.draw_eyes(frame, frame)
+                        
+                    elapsed_loop = time.time() - loop_start
+                    sleep_dur = max(0.01, self.frame_time - elapsed_loop)
+                    time.sleep(sleep_dur)
+                    continue
+                else:
+                    self._active_animal = None
+                
+                # --- GIF Animation Override ---
                 if self._animation_end_time and now < self._animation_end_time:
                     if self._animation_frames:
                         if now - self._last_frame_time >= self._animation_frame_time:
