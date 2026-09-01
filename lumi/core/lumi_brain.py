@@ -364,9 +364,10 @@ class LumiBrain:
                             fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
                     
                     prompt = (
-                        f"You just saw {person.name} ({relationship}). "
+                        f"CRITICAL CONTEXT: You are currently talking to {person.name} ({relationship}). "
                         f"Notes about them: {notes}. "
-                        f"Recent memories you saved about them: {fact_str}. "
+                        f"Recent memories you saved: {fact_str}. "
+                        "When using these memories, remember that YOU are talking TO this person. If a memory says 'Palash did X and Fuad did Y' and the user is Palash, then YOU know that the user did X. "
                         "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
                         "Do not mention their notes or memories mechanically, but use them naturally to ask how they are doing (e.g. 'Did you finish X?')."
                     )
@@ -463,7 +464,8 @@ class LumiBrain:
             return f"No relevant facts found in memory for {person.name if person else 'this person'}."
             
         result = f"Memories retrieved about {person.name if person else 'User'}:\n" + "\n".join(all_results)
-        result += "\n(Note: Pay close attention to who is doing what in these memories. Distinguish between the user and their friends/family.)"
+        result += f"\n(CRITICAL INSTRUCTION: You are currently talking to {person.name if person else 'the User'}. The above memories are facts about them. If the memory says 'Palash did X and Fuad did Y', and the user is Palash, you must understand that the USER did X, and their friend/colleague Fuad did Y. Do not get confused about who is who.)"
+        
         return result
 
     def _tool_describe_vision(self) -> str:
