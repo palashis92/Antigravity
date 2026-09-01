@@ -693,60 +693,51 @@ class LumiBrain:
     def _tool_show_animal_animation(self, animal: str) -> str:
         """Shows an animal animation on the screen while the LLM mimics the sound."""
         import os
+        import urllib.request
+        from PIL import Image
         
         animal_lower = animal.lower().strip()
         assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "animals")
         os.makedirs(assets_dir, exist_ok=True)
         
-        img_path = os.path.join(assets_dir, f"{animal_lower}.png")
+        # Audio playback (if user provided real MP3s, play them)
+        audio_path = os.path.join(assets_dir, f"{animal_lower}.mp3")
+        wav_path = os.path.join(assets_dir, f"{animal_lower}.wav")
+        audio_found = False
+        if os.path.exists(audio_path):
+            if hasattr(self.speaker, "play_file"):
+                self.speaker.play_file(audio_path, block=False)
+            audio_found = True
+        elif os.path.exists(wav_path):
+            if hasattr(self.speaker, "play_file"):
+                self.speaker.play_file(wav_path, block=False)
+            audio_found = True
+            
+        # Display Animation via DuckDuckGo Search Library
+        img_path = os.path.join(assets_dir, f"{animal_lower}.gif")
         
-        # If the file doesn't exist, let's create a cute placeholder!
         if not os.path.exists(img_path):
             try:
-                from PIL import Image, ImageDraw
-                img = Image.new('RGB', (240, 240), (30, 30, 40))
-                draw = ImageDraw.Draw(img)
-                
-                # Draw a simple animal face placeholder based on the name
-                color = (255, 150, 50) if animal_lower == "cat" else (150, 200, 255) if animal_lower == "bird" else (200, 150, 100)
-                
-                # Feature (Ears or Beak)
-                if animal_lower == "cat":
-                    draw.polygon([40,40, 80,40, 60,80], fill=color)
-                    draw.polygon([160,40, 200,40, 180,80], fill=color)
-                elif animal_lower == "dog":
-                    # Floppy ears
-                    draw.ellipse([20,40, 70,160], fill=(120,80,40))
-                    draw.ellipse([170,40, 220,160], fill=(120,80,40))
-                
-                # Big circle for head
-                draw.ellipse([40, 40, 200, 200], fill=color)
-                
-                # Eyes
-                draw.ellipse([80, 90, 100, 120], fill=(0,0,0))
-                draw.ellipse([140, 90, 160, 120], fill=(0,0,0))
-                
-                # Mouth/Beak
-                if animal_lower == "bird":
-                    # Beak
-                    draw.polygon([100,130, 140,130, 120,170], fill=(255,200,0))
-                else:
-                    # Snout/Nose
-                    draw.ellipse([110, 130, 130, 145], fill=(0,0,0))
-                
-                # Whiskers
-                if animal_lower == "cat":
-                    draw.line([20,120, 60,110], fill=(255,255,255), width=3)
-                    draw.line([20,130, 60,130], fill=(255,255,255), width=3)
-                    draw.line([180,110, 220,120], fill=(255,255,255), width=3)
-                    draw.line([180,130, 220,130], fill=(255,255,255), width=3)
-                
-                img.save(img_path)
+                from duckduckgo_search import DDGS
+                logger.info(f"Using DDGS library to fetch {animal} GIF...")
+                results = DDGS().images(f"cute {animal} pixel art animation gif", max_results=1)
+                if results and len(results) > 0:
+                    img_url = results[0]['image']
+                    req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=5) as response:
+                        with open(img_path, 'wb') as f:
+                            f.write(response.read())
             except Exception as e:
-                return "Failed to display animal."
+                logger.error(f"DDGS image search failed: {e}")
                 
-        # Play the animation (it will show on the screen for 4 seconds)
-        if hasattr(self.eyes, "play_animation"):
-            self.eyes.play_animation(img_path, duration=4.0)
-            
-        return f"Successfully displayed {animal} animation. NOW immediately use your voice to make a highly realistic, cute {animal} sound! Do not say anything else, just make the sound!"
+        # If we successfully downloaded or already had a GIF, play it
+        if os.path.exists(img_path) and hasattr(self.eyes, "play_animation"):
+            try:
+                self.eyes.play_animation(img_path, duration=5.0)
+            except Exception as e:
+                logger.error(f"Failed to play animation: {e}")
+                
+        if audio_found:
+            return f"Successfully displayed {animal} animation and played sound from disk."
+        else:
+            return f"Successfully displayed {animal} animation. NOW immediately use your voice to make a highly realistic, cute {animal} sound! Do not say anything else, just make the sound!"
