@@ -139,12 +139,77 @@ class EyeRenderer:
             self._is_blinking = True
             self._blink_start_time = time.time()
 
+    def play_animation(self, image_path: str, duration: float = 3.0) -> None:
+        """Temporarily replace the eyes with an image or GIF animation."""
+        if not _HAS_PIL:
+            logger.warning("PIL not installed, cannot play animation.")
+            return
+            
+        try:
+            from PIL import Image, ImageSequence
+            img = Image.open(image_path)
+            
+            # Extract frames if GIF, else just one frame
+            frames = []
+            for frame in ImageSequence.Iterator(img):
+                frame = frame.convert("RGB")
+                # Resize to fit screen (240x240 usually)
+                frame = frame.resize((self.width, self.height), Image.Resampling.LANCZOS)
+                frames.append(frame)
+                
+            if not frames:
+                return
+                
+            self._animation_frames = frames
+            self._animation_end_time = time.time() + duration
+            self._animation_frame_idx = 0
+            # Get GIF duration per frame in seconds, default to 100ms
+            self._animation_frame_time = img.info.get('duration', 100) / 1000.0
+            if self._animation_frame_time <= 0:
+                self._animation_frame_time = 0.1
+            self._last_frame_time = time.time()
+            logger.info(f"Playing animation {image_path} ({len(frames)} frames) for {duration}s")
+        except Exception as e:
+            logger.error(f"Failed to load animation {image_path}: {e}")
+
     def _render_loop(self) -> None:
+        # Initialize animation state
+        self._animation_frames = []
+        self._animation_end_time = None
+        self._animation_frame_idx = 0
+        self._animation_frame_time = 0.1
+        self._last_frame_time = 0
+        
         while self._running:
             loop_start = time.time()
             try:
-                # Process Blinking Logic
                 now = time.time()
+                
+                # --- Animation Override ---
+                if self._animation_end_time and now < self._animation_end_time:
+                    if self._animation_frames:
+                        if now - self._last_frame_time >= self._animation_frame_time:
+                            self._animation_frame_idx = (self._animation_frame_idx + 1) % len(self._animation_frames)
+                            self._last_frame_time = now
+                        
+                        frame = self._animation_frames[self._animation_frame_idx]
+                        if self.single_display_both_eyes:
+                            self.display.draw_eyes(frame, None)
+                        else:
+                            self.display.draw_eyes(frame, frame)
+                    
+                    # Regulate frame rate and skip procedural eyes
+                    elapsed_loop = time.time() - loop_start
+                    sleep_dur = self.frame_time - elapsed_loop
+                    if sleep_dur > 0.001:
+                        time.sleep(sleep_dur)
+                    continue
+                else:
+                    self._animation_end_time = None
+                    self._animation_frames = []
+
+                # --- Procedural Eyes Logic ---
+                # Process Blinking Logic
                 if not self._is_blinking and not self.is_sleeping and now >= self._next_blink_time:
                     self.trigger_blink()
 

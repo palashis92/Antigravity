@@ -102,7 +102,20 @@ class LumiBrain:
             "type": "object", "properties": {"name": {"type": "string"}, "phone": {"type": "string"}, "address": {"type": "string"}}, "required": ["name"]
         })
         self.tools.register("set_reminder", self._tool_set_reminder, "Set a time-based reminder. You MUST provide the time in ISO 8601 format (YYYY-MM-DDThh:mm:ss). Calculate this based on the current time provided in your system instructions.", {
-            "type": "object", "properties": {"title": {"type": "string", "description": "Short title of the reminder"}, "description": {"type": "string", "description": "Optional details"}, "remind_at_iso": {"type": "string", "description": "ISO 8601 formatted datetime string"}}, "required": ["title", "remind_at_iso"]
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Short title for the reminder (e.g. Take medicine)."},
+                "remind_at_iso": {"type": "string", "description": "The exact date and time to trigger the reminder in ISO 8601 format."},
+                "description": {"type": "string", "description": "Optional details about the reminder."}
+            },
+            "required": ["title", "remind_at_iso"]
+        })
+        self.tools.register("show_animal_animation", self._tool_show_animal_animation, "Show an animal animation/image on your screen. Call this when the user asks how an animal sounds or acts, while SIMULTANEOUSLY using your voice to mimic the animal sound.", {
+            "type": "object",
+            "properties": {
+                "animal": {"type": "string", "description": "The name of the animal (e.g. cat, dog, bird)."}
+            },
+            "required": ["animal"]
         })
         self.tools.register("send_email", self._tool_send_email, "Send an email.", {
             "type": "object", "properties": {"to_address": {"type": "string"}, "subject": {"type": "string"}, "message": {"type": "string"}}, "required": ["to_address", "subject", "message"]
@@ -676,3 +689,64 @@ class LumiBrain:
 
 
 
+
+    def _tool_show_animal_animation(self, animal: str) -> str:
+        """Shows an animal animation on the screen while the LLM mimics the sound."""
+        import os
+        
+        animal_lower = animal.lower().strip()
+        assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "animals")
+        os.makedirs(assets_dir, exist_ok=True)
+        
+        img_path = os.path.join(assets_dir, f"{animal_lower}.png")
+        
+        # If the file doesn't exist, let's create a cute placeholder!
+        if not os.path.exists(img_path):
+            try:
+                from PIL import Image, ImageDraw
+                img = Image.new('RGB', (240, 240), (30, 30, 40))
+                draw = ImageDraw.Draw(img)
+                
+                # Draw a simple animal face placeholder based on the name
+                color = (255, 150, 50) if animal_lower == "cat" else (150, 200, 255) if animal_lower == "bird" else (200, 150, 100)
+                
+                # Feature (Ears or Beak)
+                if animal_lower == "cat":
+                    draw.polygon([40,40, 80,40, 60,80], fill=color)
+                    draw.polygon([160,40, 200,40, 180,80], fill=color)
+                elif animal_lower == "dog":
+                    # Floppy ears
+                    draw.ellipse([20,40, 70,160], fill=(120,80,40))
+                    draw.ellipse([170,40, 220,160], fill=(120,80,40))
+                
+                # Big circle for head
+                draw.ellipse([40, 40, 200, 200], fill=color)
+                
+                # Eyes
+                draw.ellipse([80, 90, 100, 120], fill=(0,0,0))
+                draw.ellipse([140, 90, 160, 120], fill=(0,0,0))
+                
+                # Mouth/Beak
+                if animal_lower == "bird":
+                    # Beak
+                    draw.polygon([100,130, 140,130, 120,170], fill=(255,200,0))
+                else:
+                    # Snout/Nose
+                    draw.ellipse([110, 130, 130, 145], fill=(0,0,0))
+                
+                # Whiskers
+                if animal_lower == "cat":
+                    draw.line([20,120, 60,110], fill=(255,255,255), width=3)
+                    draw.line([20,130, 60,130], fill=(255,255,255), width=3)
+                    draw.line([180,110, 220,120], fill=(255,255,255), width=3)
+                    draw.line([180,130, 220,130], fill=(255,255,255), width=3)
+                
+                img.save(img_path)
+            except Exception as e:
+                return "Failed to display animal."
+                
+        # Play the animation (it will show on the screen for 4 seconds)
+        if hasattr(self.eyes, "play_animation"):
+            self.eyes.play_animation(img_path, duration=4.0)
+            
+        return f"Successfully displayed {animal} animation. NOW immediately use your voice to make a highly realistic, cute {animal} sound! Do not say anything else, just make the sound!"
