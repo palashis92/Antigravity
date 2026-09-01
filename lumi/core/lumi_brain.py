@@ -708,11 +708,53 @@ class LumiBrain:
             if hasattr(self.speaker, "play_file"):
                 self.speaker.play_file(audio_path, block=False)
             audio_found = True
-        elif os.path.exists(wav_path):
-            if hasattr(self.speaker, "play_file"):
-                self.speaker.play_file(wav_path, block=False)
-            audio_found = True
-            
+        # Synthesize audio if missing
+        if not audio_found:
+            try:
+                import wave, math, struct, random
+                def save_wav(filename, samples, sample_rate=44100):
+                    with wave.open(filename, 'w') as f:
+                        f.setnchannels(1)
+                        f.setsampwidth(2)
+                        f.setframerate(sample_rate)
+                        for s in samples:
+                            f.writeframesraw(struct.pack('<h', int(max(-32767, min(32767, s * 32767)))))
+                
+                sr = 44100
+                samples = []
+                if animal_lower == "bird":
+                    duration = 0.2
+                    for i in range(int(sr * duration)):
+                        t = i / sr
+                        freq = 2000 + 3000 * (t / duration)
+                        amp = math.sin(t * math.pi / duration)
+                        samples.append(math.sin(2 * math.pi * freq * t) * amp)
+                    save_wav(wav_path, samples)
+                elif animal_lower == "cat":
+                    duration = 0.8
+                    for i in range(int(sr * duration)):
+                        t = i / sr
+                        freq = 600 + (400 * (t / 0.3)) if t < 0.3 else 1000 - (500 * ((t - 0.3) / 0.5))
+                        env = math.sin(t * math.pi / duration)
+                        samples.append((math.sin(2 * math.pi * freq * t) + 0.3 * math.sin(2 * math.pi * freq * 2 * t)) * env * 0.8)
+                    save_wav(wav_path, samples)
+                elif animal_lower == "dog":
+                    duration = 0.3
+                    for i in range(int(sr * duration)):
+                        t = i / sr
+                        env = math.exp(-t * 15)
+                        noise = random.uniform(-1, 1)
+                        freq = 300 - (100 * (t / duration))
+                        tone = math.sin(2 * math.pi * freq * t)
+                        samples.append((noise * 0.4 + tone * 0.6) * env)
+                    save_wav(wav_path, samples)
+                
+                if os.path.exists(wav_path) and hasattr(self.speaker, "play_file"):
+                    self.speaker.play_file(wav_path, block=False)
+                    audio_found = True
+            except Exception as e:
+                logger.error(f"Failed to synthesize audio: {e}")
+
         # Display Animation via DuckDuckGo Search Library
         img_path = os.path.join(assets_dir, f"{animal_lower}.gif")
         
@@ -720,7 +762,7 @@ class LumiBrain:
             try:
                 from duckduckgo_search import DDGS
                 logger.info(f"Using DDGS library to fetch {animal} GIF...")
-                results = DDGS().images(f"cute {animal} pixel art animation gif", max_results=1)
+                results = DDGS().images(f"cute {animal} face animation gif", max_results=1)
                 if results and len(results) > 0:
                     img_url = results[0]['image']
                     req = urllib.request.Request(img_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -738,6 +780,6 @@ class LumiBrain:
                 logger.error(f"Failed to play animation: {e}")
                 
         if audio_found:
-            return f"Successfully displayed {animal} animation and played sound from disk."
+            return f"Successfully displayed {animal} animation and played synthesized sound. Acknowledge this playfully."
         else:
-            return f"Successfully displayed {animal} animation. NOW immediately use your voice to make a highly realistic, cute {animal} sound! Do not say anything else, just make the sound!"
+            return f"Successfully displayed {animal}. Make a cute {animal} sound with your voice now!"
