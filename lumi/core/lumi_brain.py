@@ -712,6 +712,17 @@ class LumiBrain:
         if not audio_found:
             try:
                 import wave, math, struct, random
+                try:
+                    from .assets.animal_registry import ANIMALS
+                except ImportError:
+                    try:
+                        from lumi.assets.animal_registry import ANIMALS
+                    except ImportError:
+                        ANIMALS = {}
+                        
+                animal_data = ANIMALS.get(animal_lower, {'audio': 'bark'})
+                audio_type = animal_data.get('audio', 'bark')
+                
                 def save_wav(filename, samples, sample_rate=44100):
                     with wave.open(filename, 'w') as f:
                         f.setnchannels(1)
@@ -722,23 +733,51 @@ class LumiBrain:
                 
                 sr = 44100
                 samples = []
-                if animal_lower == "bird":
+                
+                if audio_type in ['chirp', 'squeak', 'eagle_cry']:
                     duration = 0.2
                     for i in range(int(sr * duration)):
                         t = i / sr
                         freq = 2000 + 3000 * (t / duration)
                         amp = math.sin(t * math.pi / duration)
                         samples.append(math.sin(2 * math.pi * freq * t) * amp)
-                    save_wav(wav_path, samples)
-                elif animal_lower == "cat":
+                        
+                elif audio_type in ['meow', 'howl']:
                     duration = 0.8
                     for i in range(int(sr * duration)):
                         t = i / sr
                         freq = 600 + (400 * (t / 0.3)) if t < 0.3 else 1000 - (500 * ((t - 0.3) / 0.5))
                         env = math.sin(t * math.pi / duration)
                         samples.append((math.sin(2 * math.pi * freq * t) + 0.3 * math.sin(2 * math.pi * freq * 2 * t)) * env * 0.8)
-                    save_wav(wav_path, samples)
-                elif animal_lower == "dog":
+                        
+                elif audio_type in ['roar', 'grunt', 'trumpet', 'moo']:
+                    duration = 1.0
+                    for i in range(int(sr * duration)):
+                        t = i / sr
+                        env = math.sin(t * math.pi / duration)
+                        noise = random.uniform(-1, 1)
+                        tone = math.sin(2 * math.pi * 150 * t)
+                        samples.append((noise * 0.7 + tone * 0.3) * env * 0.9)
+                        
+                elif audio_type in ['bubble', 'quack', 'croak', 'honk', 'gobble', 'caw']:
+                    duration = 0.4
+                    for i in range(int(sr * duration)):
+                        t = i / sr
+                        env = math.exp(-t * 8) * math.sin(t * 10 * math.pi) # Repeating bursts
+                        noise = random.uniform(-1, 1)
+                        freq = 400 + 200 * math.sin(t * 50)
+                        tone = math.sin(2 * math.pi * freq * t)
+                        samples.append((noise * 0.2 + tone * 0.8) * max(0, env))
+                        
+                elif audio_type in ['hiss']:
+                    duration = 0.5
+                    for i in range(int(sr * duration)):
+                        t = i / sr
+                        env = math.sin(t * math.pi / duration)
+                        noise = random.uniform(-1, 1)
+                        samples.append(noise * env * 0.6)
+                        
+                else: # default to bark/misc
                     duration = 0.3
                     for i in range(int(sr * duration)):
                         t = i / sr
@@ -747,8 +786,8 @@ class LumiBrain:
                         freq = 300 - (100 * (t / duration))
                         tone = math.sin(2 * math.pi * freq * t)
                         samples.append((noise * 0.4 + tone * 0.6) * env)
-                    save_wav(wav_path, samples)
                 
+                save_wav(wav_path, samples)
                 if os.path.exists(wav_path) and hasattr(self.speaker, "play_file"):
                     self.speaker.play_file(wav_path, block=False)
                     audio_found = True
