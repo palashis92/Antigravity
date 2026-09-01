@@ -113,7 +113,7 @@ class LumiBrain:
         self.tools.register("memorize_fact", self._tool_memorize_fact, "Save a specific fact or detail about a person or event to long-term memory. Do this autonomously whenever you learn something important (e.g. user's hobbies, current tasks, preferences).", {
             "type": "object", "properties": {"fact": {"type": "string", "description": "The fact to remember (e.g. 'Palash likes black coffee')."}, "person_name": {"type": "string", "description": "Optional name of the person this fact is about."}}, "required": ["fact"]
         })
-        self.tools.register("recall_facts", self._tool_recall_facts, "Retrieve past facts from long-term memory about a person or topic.", {
+        self.tools.register("recall_facts", self._tool_recall_facts, "Retrieve past facts from long-term memory about a person or topic. PROACTIVELY call this whenever the user brings up a new topic, a person's name, or an ongoing project to check if you have context, even if the user didn't explicitly ask you to remember. Integrate the results naturally.", {
             "type": "object", "properties": {"search_query": {"type": "string", "description": "Keywords to search for."}, "person_name": {"type": "string", "description": "Optional name of the person."}}, "required": ["search_query"]
         })
         
