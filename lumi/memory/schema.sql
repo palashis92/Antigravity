@@ -63,3 +63,29 @@ CREATE TABLE IF NOT EXISTS system_kv (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+-- =========================================================================
+-- Full-Text Search (FTS5) for intelligent fact retrieval
+-- Replaces dumb LIKE '%query%' with tokenized, BM25-ranked search
+-- =========================================================================
+
+CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+    fact_text,
+    content='facts',
+    content_rowid='rowid',
+    tokenize='unicode61'
+);
+
+-- Keep FTS index in sync with facts table via triggers
+CREATE TRIGGER IF NOT EXISTS facts_fts_ai AFTER INSERT ON facts BEGIN
+    INSERT INTO facts_fts(rowid, fact_text) VALUES (new.rowid, new.fact_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS facts_fts_ad AFTER DELETE ON facts BEGIN
+    INSERT INTO facts_fts(facts_fts, rowid, fact_text) VALUES('delete', old.rowid, old.fact_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS facts_fts_au AFTER UPDATE ON facts BEGIN
+    INSERT INTO facts_fts(facts_fts, rowid, fact_text) VALUES('delete', old.rowid, old.fact_text);
+    INSERT INTO facts_fts(rowid, fact_text) VALUES (new.rowid, new.fact_text);
+END;

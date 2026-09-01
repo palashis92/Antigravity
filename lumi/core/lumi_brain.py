@@ -153,6 +153,21 @@ class LumiBrain:
 
         self._subscribe_events()
 
+        # --- Proactive Memory Systems (Phase 2 + Phase 4) ---
+        # ProactiveRecallEngine: auto-injects relevant memories during conversation
+        from ..memory.proactive_recall import ProactiveRecallEngine
+        self.proactive_recall = ProactiveRecallEngine(
+            memory=self.memory,
+            mem0=self.mem0,
+            realtime_voice=self.realtime_voice,
+            event_bus=self.event_bus,
+        )
+
+        # MemoryConsolidator: background daemon for dedup, staleness decay, cleanup
+        from ..memory.consolidation import MemoryConsolidator
+        self.memory_consolidator = MemoryConsolidator(self.memory)
+        self.memory_consolidator.start()
+
     def _subscribe_events(self) -> None:
         self.event_bus.subscribe("reminder.due", self._on_reminder_due)
         self.event_bus.subscribe("vision.face_detected", self._on_face_detected)
@@ -168,6 +183,31 @@ class LumiBrain:
                 return
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
+
+        # --- Person-mention detection (Phase 2, Change 5) ---
+        # If the user mentions another known person by name, auto-inject their facts
+        if u_text:
+            try:
+                for p in self.memory.list_people():
+                    if p.id == person.id:
+                        continue  # Skip the active person (already have their context)
+                    name_lower = p.name.lower()
+                    first_name = name_lower.split()[0] if name_lower else ""
+                    if name_lower in u_text.lower() or (len(first_name) > 2 and first_name in u_text.lower()):
+                        mentioned_facts = self.memory.recall_facts(person_id=p.id)
+                        if mentioned_facts:
+                            facts_str = ", ".join([f.fact_text for f in mentioned_facts[:3]])
+                            context = (
+                                f"[MEMORY CONTEXT: The user just mentioned {p.name} ({p.relationship}). "
+                                f"What you remember about {p.name}: {facts_str}. "
+                                f"Use this knowledge naturally.]"
+                            )
+                            if hasattr(self.realtime_voice, "inject_context"):
+                                self.realtime_voice.inject_context(context)
+                            break  # Only inject for first mentioned person per turn
+            except Exception as e:
+                logger.debug(f"Person-mention detection error: {e}")
+
         if u_text or l_text:
             self.mem0.process_conversation_turn_async(
                 person_id=person.id,
@@ -313,6 +353,8 @@ class LumiBrain:
         """Cleanly shuts down all threads and realtime sessions."""
         self._running = False
         self.realtime_voice.stop()
+        if hasattr(self, "memory_consolidator"):
+            self.memory_consolidator.stop()
         if self._perception_thread:
             self._perception_thread.join(timeout=1.0)
         if self._audio_thread:
@@ -432,8 +474,11 @@ class LumiBrain:
         return "Failed to memorize fact due to privacy consent settings."
 
     def _tool_recall_facts(self, search_query: str, person_name: Optional[str] = None) -> str:
-        """Recall saved facts from semantic memory."""
+        """Recall saved facts from semantic memory with dedup and recency scoring."""
+        from datetime import datetime as _dt
+
         person_id = None
+        person = None
         if person_name:
             person = self.memory.find_person_by_name(person_name)
             if person:
@@ -446,24 +491,70 @@ class LumiBrain:
             person = active or fallback
             if person:
                 person_id = person.id
-                
-        # 1. Check local SQLite memory
-        local_facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
-        local_results = [f"- {f.fact_text} (from {f.created_at[:10]})" for f in local_facts[:5]]
+
+        # 1. Check local SQLite memory (prefer FTS5 if available, fallback to LIKE)
+        if hasattr(self.memory, "recall_facts_fts"):
+            local_facts = self.memory.recall_facts_fts(search_query, person_id=person_id, limit=10)
+        else:
+            local_facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
         
         # 2. Check Mem0 Cloud (if active)
-        cloud_results = []
+        cloud_facts_text = ""
         if hasattr(self, "mem0") and hasattr(self.mem0, "recall_facts_sync"):
-            cloud_str = self.mem0.recall_facts_sync(person_id=person_id or "default", query=search_query)
-            if cloud_str:
-                cloud_results.append(f"- {cloud_str}")
-                
-        all_results = local_results + cloud_results
+            cloud_facts_text = self.mem0.recall_facts_sync(person_id=person_id or "default", query=search_query)
+
+        # 3. Apply recency-weighted scoring to local facts
+        now = _dt.now()
+        scored_facts = []
+        for f in local_facts:
+            try:
+                created = _dt.fromisoformat(f.created_at)
+                age_days = max((now - created).days, 0)
+            except (ValueError, TypeError):
+                age_days = 365
+            recency_score = 0.5 ** (age_days / 30.0)
+            score = f.confidence * recency_score
+            scored_facts.append((f, score))
         
-        if not all_results:
+        scored_facts.sort(key=lambda x: x[1], reverse=True)
+        top_facts = scored_facts[:7]
+
+        # 4. Deduplicate local results
+        seen_texts: set = set()
+        unique_results: list = []
+        for f, score in top_facts:
+            normalized = " ".join(f.fact_text.lower().split())
+            is_dup = False
+            for seen in seen_texts:
+                # Simple word-overlap check
+                words_a, words_b = set(normalized.split()), set(seen.split())
+                if words_a and words_b:
+                    overlap = len(words_a & words_b) / len(words_a | words_b)
+                    if overlap > 0.75:
+                        is_dup = True
+                        break
+            if not is_dup:
+                seen_texts.add(normalized)
+                unique_results.append(f"- {f.fact_text} (from {f.created_at[:10]})")
+
+        # 5. Add cloud results (deduped against local)
+        if cloud_facts_text:
+            cloud_normalized = " ".join(cloud_facts_text.lower().split())
+            is_cloud_dup = False
+            for seen in seen_texts:
+                words_a, words_b = set(cloud_normalized.split()), set(seen.split())
+                if words_a and words_b:
+                    overlap = len(words_a & words_b) / len(words_a | words_b)
+                    if overlap > 0.75:
+                        is_cloud_dup = True
+                        break
+            if not is_cloud_dup:
+                unique_results.append(f"- {cloud_facts_text}")
+                
+        if not unique_results:
             return f"No relevant facts found in memory for {person.name if person else 'this person'}."
             
-        result = f"Memories retrieved about {person.name if person else 'User'}:\n" + "\n".join(all_results)
+        result = f"Memories retrieved about {person.name if person else 'User'}:\n" + "\n".join(unique_results)
         result += f"\n(CRITICAL INSTRUCTION: You are currently talking to {person.name if person else 'the User'}. The above memories are facts about them. If the memory says 'Palash did X and Fuad did Y', and the user is Palash, you must understand that the USER did X, and their friend/colleague Fuad did Y. Do not get confused about who is who.)"
         
         return result

@@ -237,6 +237,43 @@ class MemoryManager:
         rows = self.db.execute_query(query, tuple(params))
         return [Fact.from_row(r) for r in rows]
 
+    def recall_facts_fts(
+        self,
+        search_query: str,
+        person_id: Optional[str] = None,
+        limit: int = 10,
+    ) -> List[Fact]:
+        """Full-text search for facts using SQLite FTS5 with BM25 ranking.
+
+        Falls back to LIKE-based search if FTS5 table is not available.
+        """
+        try:
+            # Build FTS5 query: join each word with OR for broad matching
+            words = search_query.strip().split()
+            if not words:
+                return self.recall_facts(person_id=person_id)
+            fts_query = " OR ".join(f'"{w}"' for w in words if len(w) > 1)
+            if not fts_query:
+                return self.recall_facts(person_id=person_id, search_query=search_query)
+
+            query = """
+                SELECT f.*, rank FROM facts f
+                JOIN facts_fts ON f.rowid = facts_fts.rowid
+                WHERE facts_fts MATCH ?
+            """
+            params: List[Any] = [fts_query]
+            if person_id:
+                query += " AND f.person_id = ?"
+                params.append(person_id)
+            query += " ORDER BY rank LIMIT ?"
+            params.append(limit)
+
+            rows = self.db.execute_query(query, tuple(params))
+            return [Fact.from_row(r) for r in rows]
+        except Exception as e:
+            logger.warning(f"FTS5 search failed (falling back to LIKE): {e}")
+            return self.recall_facts(person_id=person_id, search_query=search_query)
+
     def forget_fact(self, fact_id: str) -> bool:
         """Delete a specific fact."""
         affected = self.db.execute_write("DELETE FROM facts WHERE id = ?", (fact_id,))
