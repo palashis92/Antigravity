@@ -187,7 +187,6 @@ class EyeRenderer:
         except ImportError:
             ANIMALS = {}
             
-        # 1. Seamless transition: Pure black background like normal eyes
         img = Image.new('RGB', (self.width, self.height), (0, 0, 0))
         draw = ImageDraw.Draw(img)
         
@@ -195,10 +194,10 @@ class EyeRenderer:
         animal_data = ANIMALS.get(animal_lower, {'template': 'bear'})
         template = animal_data.get('template', 'bear')
         
-        # 2. Use the robot's eye color for all animal drawings to make it look like the eyes morphed
+        # Robot's primary neon color
         eye_color = getattr(self, 'eye_color', (0, 255, 255))
         
-        # Smooth transition effect: Scale up at start, scale down at end
+        # Smooth transition effect: Scale up features at start, scale down at end
         duration = getattr(self, '_animal_duration', 3.0)
         time_left = max(0, duration - elapsed)
         
@@ -209,139 +208,160 @@ class EyeRenderer:
         else:
             morph_scale = 1.0
             
-        # Add slight elastic bounce
+        # Add slight elastic bounce to features appearing
         morph_scale = math.sin(morph_scale * math.pi / 2)
         
-        # Scaling factors for different screen sizes (default assumes 240x240)
-        sx = (self.width / 240.0) * morph_scale
-        sy = (self.height / 240.0) * morph_scale
-        
-        # Center offset based on scale
-        cx = (self.width - (240 * sx)) / 2
-        cy = (self.height - (240 * sy)) / 2
+        # Scaling factors for 240x240 screen
+        sx = (self.width / 240.0)
+        sy = (self.height / 240.0)
         
         def scale(coords):
-            return [c * sx + cx if i % 2 == 0 else c * sy + cy for i, c in enumerate(coords)]
+            return [c * sx if i % 2 == 0 else c * sy for i, c in enumerate(coords)]
             
+        # Breathe and motion
         breathe = math.sin(elapsed * 4) * 2
-        mouth_open = max(0, math.sin(elapsed * 12)) * 15
+        mouth_open = max(0, math.sin(elapsed * 12)) * 10
+        
+        # --- BASE EYES (Always present, maintaining the illusion) ---
+        # The standard eye ovals
+        eye_w, eye_h = 30, 60
+        lx, rx = 70, 170
+        y = 120 + breathe
+        
+        # Modify eyes slightly based on template
+        if template == 'reptile':
+            # Slit pupils for reptiles
+            draw.ellipse(scale([lx - eye_w/2, y - eye_h/2, lx + eye_w/2, y + eye_h/2]), fill=eye_color)
+            draw.ellipse(scale([rx - eye_w/2, y - eye_h/2, rx + eye_w/2, y + eye_h/2]), fill=eye_color)
+            draw.rectangle(scale([lx - 3, y - eye_h/2, lx + 3, y + eye_h/2]), fill=(0,0,0))
+            draw.rectangle(scale([rx - 3, y - eye_h/2, rx + 3, y + eye_h/2]), fill=(0,0,0))
+        elif animal_data.get('panda_eyes'):
+            # Big dark patches around eyes for pandas
+            draw.ellipse(scale([lx - 40, y - 50, lx + 40, y + 50]), fill=(30, 30, 30))
+            draw.ellipse(scale([rx - 40, y - 50, rx + 40, y + 50]), fill=(30, 30, 30))
+            draw.ellipse(scale([lx - eye_w/2, y - eye_h/2, lx + eye_w/2, y + eye_h/2]), fill=eye_color)
+            draw.ellipse(scale([rx - eye_w/2, y - eye_h/2, rx + eye_w/2, y + eye_h/2]), fill=eye_color)
+        else:
+            # Standard filled eyes
+            draw.ellipse(scale([lx - eye_w/2, y - eye_h/2, lx + eye_w/2, y + eye_h/2]), fill=eye_color)
+            draw.ellipse(scale([rx - eye_w/2, y - eye_h/2, rx + eye_w/2, y + eye_h/2]), fill=eye_color)
+
+        # --- NEON FEATURES (Line-art drawn around the eyes) ---
+        lw = int(4 * sx) # Line width
         
         if template == 'feline':
+            # Cat ears
+            ear_h = 40 * morph_scale
+            draw.line(scale([lx-20, y-eye_h/2, lx-30, y-eye_h/2-ear_h, lx+10, y-eye_h/2]), fill=eye_color, width=lw)
+            draw.line(scale([rx+20, y-eye_h/2, rx+30, y-eye_h/2-ear_h, rx-10, y-eye_h/2]), fill=eye_color, width=lw)
+            # Whiskers
+            w_w = 40 * morph_scale
+            w_move = math.sin(elapsed * 10) * 5
+            for wy in [y, y+15]:
+                draw.line(scale([lx-20, wy, lx-20-w_w, wy+w_move]), fill=eye_color, width=lw)
+                draw.line(scale([rx+20, wy, rx+20+w_w, wy+w_move]), fill=eye_color, width=lw)
+            # Tiny mouth
+            draw.arc(scale([110, y+20, 120, y+30+mouth_open]), 0, 180, fill=eye_color, width=lw)
+            draw.arc(scale([120, y+20, 130, y+30+mouth_open]), 0, 180, fill=eye_color, width=lw)
+            
             if animal_data.get('mane'):
-                # Big fuzzy mane for lions
+                # Lion mane (dashed circular rays)
                 for i in range(12):
-                    ang = i * (math.pi / 6)
-                    mx = 120 + math.cos(ang) * 90
-                    my = 120 + math.sin(ang) * 90
-                    draw.ellipse(scale([mx-30, my-30, mx+30, my+30]), fill=eye_color)
-            
-            twitch = math.sin(elapsed * 15) * 5 if (elapsed % 2) < 0.5 else 0
-            draw.polygon(scale([40-twitch, 40+twitch, 80, 40, 60, 80+breathe]), fill=eye_color)
-            draw.polygon(scale([200+twitch, 40+twitch, 160, 40, 180, 80+breathe]), fill=eye_color)
-            draw.ellipse(scale([40, 40-breathe, 200, 200+breathe]), fill=eye_color if not animal_data.get('mane') else (0,0,0))
-            if animal_data.get('mane'):
-                draw.ellipse(scale([50, 50-breathe, 190, 190+breathe]), outline=eye_color, width=4)
-                
-            draw.ellipse(scale([80, 90, 100, 120]), fill=(0,0,0) if not animal_data.get('mane') else eye_color)
-            draw.ellipse(scale([140, 90, 160, 120]), fill=(0,0,0) if not animal_data.get('mane') else eye_color)
-            draw.ellipse(scale([110, 140, 130, 145 + mouth_open]), fill=(0,0,0) if not animal_data.get('mane') else eye_color)
-            
-            if animal_data.get('stripes'):
-                draw.line(scale([120, 40, 120, 60]), fill=(0,0,0), width=5)
-                draw.line(scale([100, 45, 110, 65]), fill=(0,0,0), width=4)
-                draw.line(scale([140, 45, 130, 65]), fill=(0,0,0), width=4)
-                draw.line(scale([50, 100, 70, 110]), fill=(0,0,0), width=4)
-                draw.line(scale([190, 100, 170, 110]), fill=(0,0,0), width=4)
-                
-            if animal_data.get('spots'):
-                for sx_spot, sy_spot in [(60, 80), (70, 160), (160, 70), (180, 140), (120, 180)]:
-                    draw.ellipse(scale([sx_spot, sy_spot, sx_spot+15, sy_spot+15]), fill=(0,0,0))
-                
-            w_move = math.sin(elapsed * 10) * 3
-            for w in [(110, 115), (130, 125)]:
-                draw.line(scale([20, w[0]-w_move, 60, w[1]]), fill=(0,0,0) if not animal_data.get('mane') else eye_color, width=int(3*sx))
-                draw.line(scale([220, w[0]-w_move, 180, w[1]]), fill=(0,0,0) if not animal_data.get('mane') else eye_color, width=int(3*sx))
-                
+                    ang = i * (math.pi / 6) + (elapsed * 0.5)
+                    r1 = 70 + (1 - morph_scale) * 50
+                    r2 = 90 * morph_scale
+                    mx1 = 120 + math.cos(ang) * r1
+                    my1 = 120 + math.sin(ang) * r1
+                    mx2 = 120 + math.cos(ang) * r2
+                    my2 = 120 + math.sin(ang) * r2
+                    if morph_scale > 0.1:
+                        draw.line(scale([mx1, my1, mx2, my2]), fill=eye_color, width=lw)
+
         elif template == 'canine':
+            # Floppy ears
+            ear_h = 50 * morph_scale
             flap = math.sin(elapsed * 10) * 10
-            draw.ellipse(scale([20, 40, 70, 160 + flap]), fill=eye_color)
-            draw.ellipse(scale([170, 40, 220, 160 + flap]), fill=eye_color)
-            draw.ellipse(scale([40, 40-breathe, 200, 200+breathe]), fill=eye_color)
-            draw.ellipse(scale([80, 90, 100, 120]), fill=(0,0,0))
-            draw.ellipse(scale([140, 90, 160, 120]), fill=(0,0,0))
-            draw.ellipse(scale([100, 130, 140, 150]), fill=(0,0,0)) # nose
-            draw.ellipse(scale([105, 150, 135, 155 + mouth_open]), fill=(0,0,0))
+            draw.line(scale([lx-20, y-eye_h/2, lx-40-flap, y-eye_h/2+ear_h]), fill=eye_color, width=lw)
+            draw.line(scale([rx+20, y-eye_h/2, rx+40+flap, y-eye_h/2+ear_h]), fill=eye_color, width=lw)
+            # Dog nose & mouth
+            draw.ellipse(scale([110, y+10, 130, y+25]), fill=eye_color)
+            draw.line(scale([120, y+25, 120, y+35]), fill=eye_color, width=lw)
+            draw.arc(scale([100, y+15, 120, y+40+mouth_open]), 0, 180, fill=eye_color, width=lw)
+            draw.arc(scale([120, y+15, 140, y+40+mouth_open]), 0, 180, fill=eye_color, width=lw)
+            # Tongue if open
+            if mouth_open > 5:
+                draw.ellipse(scale([115, y+35, 125, y+45+mouth_open]), fill=eye_color)
 
         elif template == 'bird':
-            draw.ellipse(scale([50, 50-breathe, 190, 190+breathe]), fill=eye_color)
-            draw.ellipse(scale([85, 90, 105, 110]), fill=(0,0,0))
-            draw.ellipse(scale([135, 90, 155, 110]), fill=(0,0,0))
-            chirp = max(0, math.sin(elapsed * 20)) * 15
-            draw.polygon(scale([90, 125, 150, 125, 120, 145 - chirp/2]), fill=(0,0,0))
-            draw.polygon(scale([95, 125+chirp, 145, 125+chirp, 120, 150 + chirp]), fill=(0,0,0))
+            # Beak in center
+            beak_w = 20 * morph_scale
+            beak_h = 15 * morph_scale
+            chirp = (mouth_open / 2) * morph_scale
+            draw.polygon(scale([120-beak_w, y+10, 120+beak_w, y+10, 120, y+10+beak_h]), fill=eye_color)
+            if chirp > 0:
+                draw.polygon(scale([120-beak_w+5, y+12+chirp, 120+beak_w-5, y+12+chirp, 120, y+12+beak_h+chirp]), fill=eye_color)
+            # Little feather tuft on top
+            draw.line(scale([120, y-40, 115, y-55*morph_scale]), fill=eye_color, width=lw)
+            draw.line(scale([120, y-40, 125, y-55*morph_scale]), fill=eye_color, width=lw)
 
         elif template == 'ungulate':
-            # Wide head, chewing motion
+            # Horns / Ears
+            horn_h = 40 * morph_scale
+            if animal_lower in ['cow', 'bull', 'buffalo', 'goat']:
+                draw.arc(scale([lx-20, y-eye_h/2-horn_h, lx+20, y-eye_h/2]), 90, 270, fill=eye_color, width=lw)
+                draw.arc(scale([rx-20, y-eye_h/2-horn_h, rx+20, y-eye_h/2]), -90, 90, fill=eye_color, width=lw)
+            else: # Horse/Deer ears
+                draw.line(scale([lx-10, y-eye_h/2, lx-30, y-eye_h/2-horn_h, lx, y-eye_h/2-10]), fill=eye_color, width=lw)
+                draw.line(scale([rx+10, y-eye_h/2, rx+30, y-eye_h/2-horn_h, rx, y-eye_h/2-10]), fill=eye_color, width=lw)
+            # Big snout line
+            snout_w = 60 * morph_scale
             chew = math.sin(elapsed * 5) * 5
-            draw.ellipse(scale([50, 40-breathe, 190, 180+breathe]), fill=eye_color)
-            draw.ellipse(scale([60+chew, 140, 180+chew, 210]), fill=(0,0,0)) # snout
-            draw.ellipse(scale([90+chew, 150, 110+chew, 170]), fill=eye_color) # nostril
-            draw.ellipse(scale([130+chew, 150, 150+chew, 170]), fill=eye_color) # nostril
-            draw.ellipse(scale([80, 80, 100, 110]), fill=(0,0,0))
-            draw.ellipse(scale([140, 80, 160, 110]), fill=(0,0,0))
+            draw.arc(scale([120-snout_w+chew, y+30, 120+snout_w+chew, y+60]), 0, 180, fill=eye_color, width=lw)
+            # Elephant trunk
             if animal_data.get('trunk'):
-                draw.ellipse(scale([110, 160, 130, 220]), fill=(0,0,0))
-            
+                draw.line(scale([120, y+20, 120+math.sin(elapsed*3)*20, y+80*morph_scale]), fill=eye_color, width=lw*2)
+
         elif template == 'rodent':
-            # Big ears, big teeth
+            # Big round/tall ears
             long_ears = animal_data.get('long_ears', False)
-            ear_y = 20 if long_ears else 50
-            draw.ellipse(scale([30, ear_y, 90, 110]), fill=eye_color)
-            draw.ellipse(scale([150, ear_y, 210, 110]), fill=eye_color)
-            draw.ellipse(scale([50, 80-breathe, 190, 190+breathe]), fill=eye_color)
-            draw.ellipse(scale([85, 100, 105, 120]), fill=(0,0,0))
-            draw.ellipse(scale([135, 100, 155, 120]), fill=(0,0,0))
-            draw.ellipse(scale([110, 130, 130, 140]), fill=(0,0,0)) # nose
-            draw.rectangle(scale([110, 140, 120, 150]), fill=(0,0,0)) # teeth
-            draw.rectangle(scale([120, 140, 130, 150]), fill=(0,0,0))
+            ear_h = (60 if long_ears else 30) * morph_scale
+            ear_w = 20 if long_ears else 30
+            draw.ellipse(scale([lx-ear_w, y-eye_h/2-ear_h, lx+ear_w, y-eye_h/2]), outline=eye_color, width=lw)
+            draw.ellipse(scale([rx-ear_w, y-eye_h/2-ear_h, rx+ear_w, y-eye_h/2]), outline=eye_color, width=lw)
+            # Buck teeth
+            draw.rectangle(scale([112, y+20, 119, y+30+mouth_open]), outline=eye_color, width=lw-1)
+            draw.rectangle(scale([121, y+20, 128, y+30+mouth_open]), outline=eye_color, width=lw-1)
 
         elif template == 'reptile':
-            # Wide mouth, slit eyes, tongue
-            draw.ellipse(scale([30, 80-breathe, 210, 160+breathe]), fill=eye_color)
-            draw.ellipse(scale([70, 90, 100, 120]), fill=(0,0,0))
-            draw.ellipse(scale([140, 90, 170, 120]), fill=(0,0,0))
-            draw.rectangle(scale([82, 90, 88, 120]), fill=eye_color) # slit
-            draw.rectangle(scale([152, 90, 158, 120]), fill=eye_color)
-            draw.line(scale([50, 140, 190, 140]), fill=(0,0,0), width=3) # mouth
-            if math.sin(elapsed * 10) > 0.8: # tongue flick
-                draw.line(scale([120, 140, 120, 170]), fill=(0,0,0), width=3)
-                draw.line(scale([120, 170, 110, 180]), fill=(0,0,0), width=3)
-                draw.line(scale([120, 170, 130, 180]), fill=(0,0,0), width=3)
+            # Flicking tongue
+            if math.sin(elapsed * 10) > 0.6 and morph_scale > 0.8:
+                ty = y+30
+                draw.line(scale([120, y+10, 120, ty+20]), fill=eye_color, width=lw)
+                draw.line(scale([120, ty+20, 110, ty+30]), fill=eye_color, width=lw)
+                draw.line(scale([120, ty+20, 130, ty+30]), fill=eye_color, width=lw)
 
         elif template == 'bear':
-            # Round ears, round head
-            draw.ellipse(scale([40, 40, 90, 90]), fill=eye_color)
-            draw.ellipse(scale([150, 40, 200, 90]), fill=eye_color)
-            draw.ellipse(scale([40, 60-breathe, 200, 200+breathe]), fill=eye_color)
-            if animal_data.get('panda_eyes'):
-                draw.ellipse(scale([70, 90, 110, 130]), fill=(0,0,0))
-                draw.ellipse(scale([130, 90, 170, 130]), fill=(0,0,0))
-            draw.ellipse(scale([85, 100, 95, 110]), fill=eye_color if animal_data.get('panda_eyes') else (0,0,0))
-            draw.ellipse(scale([145, 100, 155, 110]), fill=eye_color if animal_data.get('panda_eyes') else (0,0,0))
-            draw.ellipse(scale([90, 140, 150, 180]), fill=(0,0,0)) # snout
-            draw.ellipse(scale([110, 145, 130, 160]), fill=eye_color) # nose
+            # Small round ears
+            ear_s = 25 * morph_scale
+            draw.arc(scale([lx-ear_s, y-eye_h/2-ear_s, lx+ear_s, y-eye_h/2+ear_s]), 180, 360, fill=eye_color, width=lw)
+            draw.arc(scale([rx-ear_s, y-eye_h/2-ear_s, rx+ear_s, y-eye_h/2+ear_s]), 180, 360, fill=eye_color, width=lw)
+            # Snout
+            draw.ellipse(scale([100, y+15, 140, y+35]), outline=eye_color, width=lw)
+            draw.ellipse(scale([115, y+20, 125, y+25]), fill=eye_color)
 
         elif template == 'aquatic':
-            # Side fins, bubbles
+            # Bubbles rising
+            for i, bx in enumerate([80, 160, 120]):
+                speed = 40 + i*10
+                offset = i * 20
+                by = 240 - ((elapsed * speed + offset) % 240)
+                if morph_scale > 0.5:
+                    draw.ellipse(scale([bx, by, bx+10, by+10]), outline=eye_color, width=lw-1)
+            # Side fins
+            fin_w = 30 * morph_scale
             flap = math.sin(elapsed * 5) * 10
-            draw.polygon(scale([40, 120, 10, 100-flap, 10, 140+flap]), fill=eye_color)
-            draw.polygon(scale([200, 120, 230, 100-flap, 230, 140+flap]), fill=eye_color)
-            draw.ellipse(scale([40, 70-breathe, 200, 170+breathe]), fill=eye_color)
-            draw.ellipse(scale([80, 100, 100, 120]), fill=(0,0,0))
-            draw.ellipse(scale([140, 100, 160, 120]), fill=(0,0,0))
-            bubble_y = 120 - ((elapsed * 50) % 120)
-            draw.ellipse(scale([120, bubble_y, 130, bubble_y+10]), outline=eye_color, width=2)
-            draw.ellipse(scale([110, bubble_y-30, 115, bubble_y-25]), outline=eye_color, width=2)
+            draw.polygon(scale([lx-20, y, lx-20-fin_w, y-10-flap, lx-20-fin_w, y+10+flap]), fill=eye_color)
+            draw.polygon(scale([rx+20, y, rx+20+fin_w, y-10-flap, rx+20+fin_w, y+10+flap]), fill=eye_color)
 
         return img
 

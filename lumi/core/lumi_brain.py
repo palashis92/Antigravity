@@ -691,7 +691,7 @@ class LumiBrain:
 
 
     def _tool_show_animal_animation(self, animal: str) -> str:
-        """Shows an animal animation on the screen while the LLM mimics the sound."""
+        """Shows an animal animation on the screen and plays the ACTUAL animal sound from the speaker. DO NOT use TTS to mimic the sound yourself (e.g. do not say "Meow" or "Woof"). Just say something natural like "Here it is!" or "Look at this!"."""
         import os
         import urllib.request
         from PIL import Image
@@ -700,14 +700,21 @@ class LumiBrain:
         assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "animals")
         os.makedirs(assets_dir, exist_ok=True)
         
-        # Audio playback (if user provided real MP3s, play them)
+        # Audio playback (if user provided real MP3s/WAVs/OGGs, play them)
         audio_path = os.path.join(assets_dir, f"{animal_lower}.mp3")
         wav_path = os.path.join(assets_dir, f"{animal_lower}.wav")
+        ogg_path = os.path.join(assets_dir, f"{animal_lower}.ogg")
         audio_found = False
         if os.path.exists(audio_path):
-            if hasattr(self.speaker, "play_file"):
-                self.speaker.play_file(audio_path, block=False)
+            self.speaker.play_audio_file(audio_path, block=False)
             audio_found = True
+        elif os.path.exists(ogg_path):
+            self.speaker.play_audio_file(ogg_path, block=False)
+            audio_found = True
+        elif os.path.exists(wav_path):
+            self.speaker.play_audio_file(wav_path, block=False)
+            audio_found = True
+        
         # Synthesize audio if missing
         if not audio_found:
             try:
