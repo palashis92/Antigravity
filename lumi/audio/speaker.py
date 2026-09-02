@@ -154,21 +154,38 @@ class I2SSpeakerBackend(SpeakerBackendBase):
 
             if block:
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+                if is_temp and os.path.exists(clean_path):
+                    try:
+                        os.remove(clean_path)
+                    except Exception:
+                        pass
             else:
                 self._current_process = subprocess.Popen(
                     cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
                 )
+                if is_temp:
+                    # Clean up the temp file after a delay to allow async playback to finish
+                    def delayed_cleanup(path, proc):
+                        try:
+                            proc.wait(timeout=30.0)
+                        except Exception:
+                            pass
+                        if os.path.exists(path):
+                            try:
+                                os.remove(path)
+                            except Exception:
+                                pass
+                    threading.Thread(target=delayed_cleanup, args=(clean_path, self._current_process), daemon=True).start()
             return True
 
         except Exception as e:
             logger.warning(f"I2S playback error: {e}")
-            return False
-        finally:
             if is_temp and os.path.exists(clean_path):
                 try:
                     os.remove(clean_path)
                 except Exception:
                     pass
+            return False
 
     def play_audio_stream(self, audio_bytes: bytes, sample_rate: int = 24000) -> bool:
         """Stream raw 16-bit PCM audio directly to MAX98357A I2S DAC (Non-blocking)."""
