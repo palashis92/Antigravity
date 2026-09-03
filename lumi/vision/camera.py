@@ -151,7 +151,10 @@ class PiCameraBackend(CameraBackendBase):
         if not self._running or self._picam is None:
             return None
         try:
-            return self._picam.capture_array()  # type: ignore
+            frame = self._picam.capture_array()  # type: ignore
+            # PiCamera2 returns RGB array, but OpenCV expects BGR. Convert it.
+            import cv2
+            return cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
         except Exception:
             return None
 
