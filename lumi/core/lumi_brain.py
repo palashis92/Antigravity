@@ -431,10 +431,10 @@ class LumiBrain:
                         "When using these memories, remember that YOU are talking TO this person. "
                         "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
                         "Do not mention their notes or memories mechanically, but use them naturally. "
-                        "APPEARANCE: You can see this person through your camera right now. "
-                        "If you notice anything nice about their appearance, outfit, hairstyle, or accessories, "
-                        "give them a genuine compliment naturally (e.g., 'ওয়াও, আজকে তোমার এই জামাটা খুব সুন্দর লাগছে!' "
-                        "or 'তোমার চশমাটা নতুন নাকি?'). Don't force it—only comment if something genuinely stands out."
+                        "CRITICAL RULE FOR APPEARANCE: Only compliment their appearance (dress, hair, etc.) if you "
+                        "CLEARLY and UNMISTAKABLY see something specific in the camera feed right now. "
+                        "If the camera feed is unclear, or you just see a face/wall without distinct clothing, "
+                        "DO NOT make up a compliment. A forced or fake compliment feels unnatural."
                     )
                     self.realtime_voice.inject_context(prompt)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
@@ -471,7 +471,7 @@ class LumiBrain:
                             "You see an unknown face! Greet them in Bengali with friendly curiosity. "
                             "Say something like 'এই যে! তুমি নতুন মুখ! আমি তো তোমাকে চিনি না!' "
                             "Ask their name. If they share it, save with 'memorize_person'. "
-                            "APPEARANCE: If their outfit or look catches your eye, compliment it naturally."
+                            "CRITICAL RULE: Do not compliment their appearance unless you clearly see something very distinct."
                         ),
                     ]
                     prompt = random.choice(unknown_prompts)

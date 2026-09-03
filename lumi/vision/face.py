@@ -110,7 +110,7 @@ class FaceRecognitionService:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(60, 60)
+                gray, scaleFactor=1.1, minNeighbors=8, minSize=(100, 100)
             )
 
             if len(faces) == 0:
