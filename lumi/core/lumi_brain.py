@@ -388,6 +388,8 @@ class LumiBrain:
         if not faces:
             return
 
+        faces = self.face_service.confirm_identity(faces)
+        
         face = faces[0]
         person_data = {
             "name": face.person.name if face.is_known and face.person else "Unknown",

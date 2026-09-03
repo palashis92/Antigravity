@@ -38,6 +38,12 @@ class FaceRecognitionService:
         self._pending_face_encoding: Optional[List[float]] = None
         self._last_interaction_timestamps: Dict[str, float] = {}
 
+        # Multi-frame voting for robust recognition
+        self._recognition_buffer: Dict[str, List[str]] = {}  # track_id -> [person_name, ...]
+        self._buffer_size = 5  # Require 5 consistent frames
+        self._min_votes = 3    # At least 3 out of 5 must agree
+        self._frame_counter = 0
+
     def _get_cascade(self, cv2: Any) -> Optional[Any]:
         if self._cascade_initialized:
             return self._cascade
@@ -177,6 +183,69 @@ class FaceRecognitionService:
         except Exception as e:
             logger.debug(f"Face detection note: {e}")
             return []
+
+    def confirm_identity(self, faces: List[DetectedFace]) -> List[DetectedFace]:
+        """Apply multi-frame voting to confirm face identity with higher confidence.
+        
+        Instead of trusting a single frame, we accumulate results over
+        several frames and only confirm identity when a person is consistently
+        recognized across multiple frames.
+        """
+        self._frame_counter += 1
+        confirmed = []
+        
+        for face in faces:
+            # Create a simple spatial track ID based on face center region
+            cx, cy = int(face.center[0] // 80), int(face.center[1] // 80)
+            track_id = f"{cx}_{cy}"
+            
+            # Get the name this frame matched
+            name = face.person.name if face.is_known and face.person else "__unknown__"
+            
+            # Initialize buffer if new track
+            if track_id not in self._recognition_buffer:
+                self._recognition_buffer[track_id] = []
+            
+            buffer = self._recognition_buffer[track_id]
+            buffer.append(name)
+            
+            # Keep only last N frames
+            if len(buffer) > self._buffer_size:
+                buffer.pop(0)
+            
+            # Count votes for the most common identity
+            if len(buffer) >= 2:  # Need at least 2 frames
+                from collections import Counter
+                vote_counts = Counter(buffer)
+                best_name, best_count = vote_counts.most_common(1)[0]
+                
+                if best_name != "__unknown__" and best_count >= self._min_votes:
+                    # Confirmed known person with high confidence!
+                    face.confidence = min(0.99, 0.7 + (best_count / self._buffer_size) * 0.3)
+                    # face.person and face.is_known are already set from the latest frame
+                elif best_name == "__unknown__" and best_count >= self._min_votes:
+                    # Confirmed unknown
+                    face.is_known = False
+                    face.person = None
+                    face.confidence = 0.90
+                else:
+                    # Not enough consensus yet — mark as uncertain but pass through
+                    # Use the latest frame's result but lower confidence
+                    face.confidence = 0.5 + (best_count / self._buffer_size) * 0.3
+            else:
+                # Not enough frames yet, lower confidence
+                face.confidence = 0.4
+            
+            confirmed.append(face)
+        
+        # Clean up stale tracks (not seen for 50+ frames)
+        if self._frame_counter % 50 == 0:
+            active_tracks = {f"{int(f.center[0] // 80)}_{int(f.center[1] // 80)}" for f in faces}
+            stale = [k for k in self._recognition_buffer if k not in active_tracks]
+            for k in stale:
+                del self._recognition_buffer[k]
+        
+        return confirmed
 
     def _simulate_face_detection(self, frame: Any) -> List[DetectedFace]:
         return [

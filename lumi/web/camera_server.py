@@ -109,6 +109,49 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
             pass  # Client disconnected
 
 
+def _draw_text_pil(frame, text: str, position: tuple, color: tuple, font_size: int = 22):
+    """Draw Unicode text (including Bengali) on an OpenCV frame using PIL."""
+    try:
+        import cv2
+        from PIL import Image, ImageDraw, ImageFont
+        import numpy as np
+
+        # Convert BGR OpenCV frame to RGB PIL Image
+        img_pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(img_pil)
+
+        # Try to find a Unicode-capable font
+        font = None
+        font_paths = [
+            "/usr/share/fonts/truetype/noto/NotoSansBengali-Regular.ttf",
+            "/usr/share/fonts/truetype/lohit-bengali/Lohit-Bengali.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ]
+        for fp in font_paths:
+            try:
+                import os
+                if os.path.exists(fp):
+                    font = ImageFont.truetype(fp, font_size)
+                    break
+            except Exception:
+                continue
+        if font is None:
+            font = ImageFont.load_default()
+
+        # PIL uses RGB color, OpenCV provides BGR
+        rgb_color = (color[2], color[1], color[0])
+        draw.text(position, text, font=font, fill=rgb_color)
+
+        # Convert back to BGR numpy array
+        frame[:] = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+    except (ImportError, Exception):
+        # PIL not available or failed, fallback to ASCII-safe cv2.putText
+        import cv2
+        safe_text = text.encode("ascii", "replace").decode("ascii")
+        cv2.putText(frame, safe_text, position, cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+
+
 class CameraFeedServer:
     """Runs an MJPEG web server in a background thread."""
 
@@ -173,17 +216,11 @@ class CameraFeedServer:
                                 # Green box + name for known persons
                                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
                                 label = face.person.name
-                                cv2.putText(
-                                    frame, label, (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2,
-                                )
+                                _draw_text_pil(frame, label, (x, y - 30), (0, 255, 0))
                             else:
                                 # Red box for unknown persons
                                 cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                                cv2.putText(
-                                    frame, "Unknown", (x, y - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2,
-                                )
+                                _draw_text_pil(frame, "Unknown", (x, y - 30), (0, 0, 255))
                     except Exception:
                         pass  # Don't let annotation errors kill the feed
 
