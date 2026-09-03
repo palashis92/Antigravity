@@ -274,6 +274,7 @@ class LumiBrain:
             self.state.transition_to(BehaviorState.IDLE, reason="reminder_delivered")
 
     def _on_face_detected(self, event: Event) -> None:
+        self._last_face_seen_time = time.time()
         person_data = event.data.get("person")
         if person_data:
             self.behavior.on_person_spotted(
@@ -283,6 +284,7 @@ class LumiBrain:
     def _perception_loop(self) -> None:
         logger.info("Starting Perception Loop")
         last_frame_time = 0.0
+        self._last_face_seen_time = time.time()
         while self._running:
             if not self.camera.is_available():
                 time.sleep(1.0)
@@ -293,6 +295,12 @@ class LumiBrain:
                 frame = self.camera.get_frame()
                 if frame is not None:
                     self.process_person_interaction(frame)
+
+            # Clear active_person if no face detected for 30 seconds
+            if self.active_person and (now - self._last_face_seen_time > 30.0):
+                logger.info(f"Active person '{self.active_person.name}' timed out (no face for 30s).")
+                self.active_person = None
+                
             time.sleep(0.1)
 
     def _compute_rms(self, pcm_data: bytes) -> float:
@@ -398,22 +406,20 @@ class LumiBrain:
         if face.is_known and face.person is not None:
             person = face.person
             self.active_person = person
+            self._last_face_seen_time = time.time()
             if self.face_service.should_interact(person.id, cooldown_s=60.0):
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
                 
                 if hasattr(self.realtime_voice, "inject_context"):
-                    # 10x Better Known Person Interaction
                     relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
                     notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
                     
                     fact_str = "None"
                     if hasattr(self.mem0, "recall_facts_sync"):
-                        # Official Mem0 Cloud API
                         fact_str = self.mem0.recall_facts_sync(person.id)
                     else:
-                        # Native SQLite Engine
                         recent_facts = self.memory.recall_facts(person_id=person.id)
                         if recent_facts:
                             fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
@@ -422,9 +428,13 @@ class LumiBrain:
                         f"CRITICAL CONTEXT: You are currently talking to {person.name} ({relationship}). "
                         f"Notes about them: {notes}. "
                         f"Recent memories you saved: {fact_str}. "
-                        "When using these memories, remember that YOU are talking TO this person. If a memory says 'Palash did X and Fuad did Y' and the user is Palash, then YOU know that the user did X. "
+                        "When using these memories, remember that YOU are talking TO this person. "
                         "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
-                        "Do not mention their notes or memories mechanically, but use them naturally to ask how they are doing (e.g. 'Did you finish X?')."
+                        "Do not mention their notes or memories mechanically, but use them naturally. "
+                        "APPEARANCE: You can see this person through your camera right now. "
+                        "If you notice anything nice about their appearance, outfit, hairstyle, or accessories, "
+                        "give them a genuine compliment naturally (e.g., 'ওয়াও, আজকে তোমার এই জামাটা খুব সুন্দর লাগছে!' "
+                        "or 'তোমার চশমাটা নতুন নাকি?'). Don't force it—only comment if something genuinely stands out."
                     )
                     self.realtime_voice.inject_context(prompt)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
@@ -436,14 +446,35 @@ class LumiBrain:
             if self.face_service.should_interact("unknown", cooldown_s=60.0):
                 self.eyes.set_expression("curious")
                 if hasattr(self.realtime_voice, "inject_context"):
-                    # 10x Better Unknown Person Interaction
-                    prompt = (
-                        "A new, unrecognized person just walked into your view. "
-                        "Act naturally curious! Greet them warmly in Bengali (বাংলা). "
-                        "Politely ask for their name, how they are related to Palash (your owner), "
-                        "and if they would like you to remember their face for next time. "
-                        "If they agree, use the 'memorize_person' tool with their details."
-                    )
+                    import random
+                    # Varied unknown person greetings for natural feel
+                    unknown_prompts = [
+                        (
+                            "A new person appeared in front of you! You don't know them. "
+                            "In Bengali, greet them warmly and ask 'তোমাকে তো চিনতে পারছি না! তুমি কে?' "
+                            "Ask their name and relationship to Palash. "
+                            "If they introduce themselves, use 'memorize_person' to save their face and name."
+                        ),
+                        (
+                            "Someone unfamiliar is standing in front of you. Be curious! "
+                            "In Bengali, say something like 'আরে, নতুন কেউ এসেছে! পরিচয়টা দাও তো!' "
+                            "Ask who they are and if they'd like you to remember them. "
+                            "When they tell their name, call 'memorize_person'."
+                        ),
+                        (
+                            "A stranger appeared! Act naturally surprised and curious. "
+                            "In Bengali, say 'ওহ, তোমাকে তো আগে দেখিনি! কী নাম তোমার?' "
+                            "Ask their name and relation to your owner Palash. "
+                            "Use 'memorize_person' tool once they introduce themselves."
+                        ),
+                        (
+                            "You see an unknown face! Greet them in Bengali with friendly curiosity. "
+                            "Say something like 'এই যে! তুমি নতুন মুখ! আমি তো তোমাকে চিনি না!' "
+                            "Ask their name. If they share it, save with 'memorize_person'. "
+                            "APPEARANCE: If their outfit or look catches your eye, compliment it naturally."
+                        ),
+                    ]
+                    prompt = random.choice(unknown_prompts)
                     self.realtime_voice.inject_context(prompt)
 
     # =========================================================================

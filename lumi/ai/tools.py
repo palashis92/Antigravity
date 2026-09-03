@@ -69,24 +69,49 @@ class ToolRegistry:
         return f"আজকের তারিখ: {now.strftime('%d %B, %Y')}, সময়: {now.strftime('%I:%M %p')}"
 
     def web_search(self, query: str) -> str:
-        """Perform a quick web search (or report offline if unavailable)."""
+        """Perform a web search with fallback chain: DuckDuckGo -> SearXNG."""
         if not self.is_online():
-            return f"ইন্টারনেট সংযোগ না থাকায় '{query}' বিষয়ে সরাসরি অনুসন্ধান করা যাচ্ছে না।"
-        
-        if not DDGS:
-            return "DuckDuckGo search library is not installed."
-            
+            return f"ইন্টারনেট সংযোগ না থাকায় '{query}' বিষয়ে সরাসরি অনুসন্ধান করা যাচ্ছে না।"
+
         logger.info(f"Executing web search for: '{query}'")
-        try:
-            results = DDGS().text(query, max_results=3)
-            if not results:
-                return f"'{query}' সম্পর্কে কোনো তথ্য পাওয়া যায়নি।"
-            
-            snippets = [f"- {r.get('title', '')}: {r.get('body', '')}" for r in results]
-            return f"'{query}' সম্পর্কে পাওয়া তথ্য:\n" + "\n".join(snippets)
-        except Exception as e:
-            logger.error(f"Web search error: {e}")
-            return f"অনুসন্ধান করার সময় একটি ত্রুটি হয়েছে: {e}"
+
+        # Strategy 1: DuckDuckGo (fastest, but sometimes blocked)
+        if DDGS:
+            try:
+                results = DDGS().text(query, max_results=3)
+                if results:
+                    snippets = [f"- {r.get('title', '')}: {r.get('body', '')}" for r in results]
+                    return f"'{query}' সম্পর্কে পাওয়া তথ্য:\n" + "\n".join(snippets)
+            except Exception as e:
+                logger.warning(f"DuckDuckGo search failed: {e}")
+
+        # Strategy 2: SearXNG Public Instances (free, no API key needed)
+        searxng_instances = [
+            "https://search.sapti.me",
+            "https://searx.be",
+            "https://search.ononoki.org",
+        ]
+        for instance in searxng_instances:
+            try:
+                params = urllib.parse.urlencode({
+                    "q": query, "format": "json", "categories": "general", "language": "bn-BD"
+                })
+                url = f"{instance}/search?{params}"
+                req = urllib.request.Request(url, headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; LUMI-Robot/1.0)",
+                    "Accept": "application/json",
+                })
+                with urllib.request.urlopen(req, timeout=8) as response:
+                    data = json.loads(response.read().decode())
+                    results = data.get("results", [])[:3]
+                    if results:
+                        snippets = [f"- {r.get('title', '')}: {r.get('content', '')}" for r in results]
+                        return f"'{query}' সম্পর্কে পাওয়া তথ্য:\n" + "\n".join(snippets)
+            except Exception as e:
+                logger.debug(f"SearXNG instance {instance} failed: {e}")
+                continue
+
+        return f"'{query}' সম্পর্কে এই মুহূর্তে কোনো তথ্য পাওয়া যায়নি। পরে আবার চেষ্টা করুন।"
 
     def get_weather(self, city: str = "Dhaka") -> str:
         """Fetch current weather report."""

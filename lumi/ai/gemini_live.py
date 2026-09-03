@@ -278,27 +278,28 @@ class GeminiLiveClient:
                             _debug_chunk_count += 1
                         except Exception:
                             break
-                        
-                        # Send video frame if camera is available (on-demand / periodic)
-                        now = time.time()
-                        if self.camera and self.camera.is_available() and (now - self._last_video_send > 1.0):
-                            frame = self.camera.get_frame()
-                            if frame is not None:
-                                try:
-                                    import cv2
-                                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
-                                    video_b64 = base64.b64encode(buffer).decode("utf-8")
-                                    await ws.send(json.dumps({
-                                        "realtimeInput": {
-                                            "video": {
-                                                "mimeType": "image/jpeg",
-                                                "data": video_b64
-                                            }
+                
+                if self._awake and getattr(self, "_is_ready", False):
+                    # Send video frame if camera is available (on-demand / periodic)
+                    now = time.time()
+                    if self.camera and self.camera.is_available() and (now - self._last_video_send > 1.0):
+                        frame = self.camera.get_frame()
+                        if frame is not None:
+                            try:
+                                import cv2
+                                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
+                                video_b64 = base64.b64encode(buffer).decode("utf-8")
+                                await ws.send(json.dumps({
+                                    "realtimeInput": {
+                                        "video": {
+                                            "mimeType": "image/jpeg",
+                                            "data": video_b64
                                         }
-                                    }))
-                                except Exception:
-                                    pass
-                            self._last_video_send = now
+                                    }
+                                }))
+                            except Exception:
+                                pass
+                        self._last_video_send = now
                 
                 await asyncio.sleep(0.01)
         except asyncio.CancelledError:

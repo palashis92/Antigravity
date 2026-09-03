@@ -155,6 +155,20 @@ class LumiApplication:
             self.mic.start()
             self.speaker.set_volume(self.settings.audio.volume)
             logger.info("[Step 10-12] Camera, Microphone, and Speaker online.")
+
+            # Start Camera Feed Web Server (accessible at http://<pi-ip>:5555/)
+            try:
+                from .web.camera_server import CameraFeedServer
+                self.camera_server = CameraFeedServer(
+                    camera=self.camera,
+                    face_service=self.brain.face_service,
+                    port=5555,
+                )
+                self.camera_server.start()
+                logger.info("[Step 12.5] Camera Feed Web Server started on port 5555.")
+            except Exception as e:
+                logger.warning(f"Camera feed server failed to start: {e}")
+
             self.event_bus.start()
             self.brain.reminders.start()
             self.brain.start_loops()

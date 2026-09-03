@@ -117,7 +117,6 @@ class FaceRecognitionService:
                 return []
 
             detected_faces = []
-            owner = self.memory.find_person_by_name("Palash")
 
             try:
                 import face_recognition
@@ -126,7 +125,7 @@ class FaceRecognitionService:
                 face_locations = [(y, x + w, y + h, x) for (x, y, w, h) in faces]
                 face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
-                known_persons = self.memory.get_all_persons()
+                known_persons = self.memory.list_people()
                 known_embeddings = [p.face_embedding for p in known_persons if p.face_embedding]
                 known_person_objects = [p for p in known_persons if p.face_embedding]
 
