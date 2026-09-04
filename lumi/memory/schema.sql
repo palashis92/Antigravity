@@ -58,6 +58,18 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 CREATE INDEX IF NOT EXISTS idx_conv_created ON conversations(created_at);
 
+CREATE TABLE IF NOT EXISTS messages (
+    id TEXT PRIMARY KEY,
+    recipient_id TEXT NOT NULL,
+    sender_name TEXT NOT NULL,
+    message_text TEXT NOT NULL,
+    is_read INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (recipient_id) REFERENCES people(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_recipient_unread ON messages(recipient_id, is_read);
+
 CREATE TABLE IF NOT EXISTS system_kv (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,

@@ -435,3 +435,38 @@ class MemoryManager:
     def forget(self, fact_id: str) -> bool:
         """Convenience wrapper to delete a specific fact."""
         return self.forget_fact(fact_id)
+
+    # -------------------------------------------------------------------------
+    # Message Routing (Leave message for when someone returns)
+    # -------------------------------------------------------------------------
+
+    def leave_message(self, recipient_name: str, sender_name: str, message_text: str) -> str:
+        """Stores a message for a specific person to be delivered when they are seen."""
+        import uuid
+        person = self.find_person_by_name(recipient_name)
+        if not person:
+            return f"I could not find '{recipient_name}' in my memory. Please use their exact name."
+            
+        msg_id = f"msg_{uuid.uuid4().hex[:8]}"
+        query = """
+            INSERT INTO messages (id, recipient_id, sender_name, message_text, is_read, created_at)
+            VALUES (?, ?, ?, ?, 0, ?)
+        """
+        self.db.execute_write(query, (msg_id, person.id, sender_name, message_text, utc_now_iso()))
+        logger.info(f"Message from {sender_name} left for {recipient_name}.")
+        return f"Message saved successfully. I will tell {recipient_name} when I see them."
+
+    def get_unread_messages(self, person_id: str) -> List[Dict[str, Any]]:
+        """Returns all unread messages for a specific person."""
+        query = """
+            SELECT id, sender_name, message_text, created_at
+            FROM messages
+            WHERE recipient_id = ? AND is_read = 0
+            ORDER BY created_at ASC
+        """
+        return self.db.execute_query(query, (person_id,))
+
+    def mark_messages_read(self, person_id: str) -> None:
+        """Marks all unread messages for a specific person as read."""
+        query = "UPDATE messages SET is_read = 1 WHERE recipient_id = ? AND is_read = 0"
+        self.db.execute_write(query, (person_id,))

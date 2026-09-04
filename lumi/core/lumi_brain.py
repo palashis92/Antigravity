@@ -129,6 +129,14 @@ class LumiBrain:
         self.tools.register("recall_facts", self._tool_recall_facts, "Retrieve past facts from long-term memory about a person or topic. PROACTIVELY call this whenever the user brings up a new topic, a person's name, or an ongoing project to check if you have context, even if the user didn't explicitly ask you to remember. Integrate the results naturally.", {
             "type": "object", "properties": {"search_query": {"type": "string", "description": "Keywords to search for."}, "person_name": {"type": "string", "description": "Optional name of the person."}}, "required": ["search_query"]
         })
+        self.tools.register("leave_message", self._tool_leave_message, "Save a message for the owner or another person if they are not currently present. When someone asks for someone else, organically ask if they want to leave a message, and if yes, use this.", {
+            "type": "object", "properties": {
+                "recipient_name": {"type": "string"},
+                "sender_name": {"type": "string"},
+                "message_text": {"type": "string"}
+            },
+            "required": ["recipient_name", "sender_name", "message_text"]
+        })
         
         from ..ai.gemini_live import GeminiLiveClient
         
@@ -426,13 +434,25 @@ class LumiBrain:
                         if recent_facts:
                             fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
                     
+                    # Check for unread messages
+                    unread_msgs = ""
+                    if hasattr(self.memory, "get_unread_messages"):
+                        msgs = self.memory.get_unread_messages(person.id)
+                        if msgs:
+                            msg_texts = [f"From {m['sender_name']}: {m['message_text']}" for m in msgs]
+                            unread_msgs = f"\nURGENT: YOU HAVE UNREAD MESSAGES FOR {person.name}: {', '.join(msg_texts)}. YOU MUST TELL THEM THIS MESSAGE IMMEDIATELY AS SOON AS YOU GREET THEM!"
+                            self.memory.mark_messages_read(person.id)
+                    
                     prompt = (
                         f"CRITICAL CONTEXT: You are currently talking to {person.name} ({relationship}). "
                         f"Notes about them: {notes}. "
-                        f"Recent memories you saved: {fact_str}. "
+                        f"Recent memories you saved: {fact_str}. {unread_msgs}\n"
                         "When using these memories, remember that YOU are talking TO this person. "
                         "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
                         "Do not mention their notes or memories mechanically, but use them naturally. "
+                        
+                        "Also casually ask what brings them here today, or if they have any message for Palash (assuming Palash is not here right now). "
+                        "If they want to leave a message, use the 'leave_message' tool. "
                         "CRITICAL RULE FOR APPEARANCE: Only compliment their appearance (dress, hair, etc.) if you "
                         "CLEARLY and UNMISTAKABLY see something specific in the camera feed right now. "
                         "If the camera feed is unclear, or you just see a face/wall without distinct clothing, "
@@ -452,27 +472,27 @@ class LumiBrain:
                     # Varied unknown person greetings for natural feel
                     unknown_prompts = [
                         (
-                            "A new person appeared in front of you! You don't know them. "
-                            "In Bengali, greet them warmly and ask 'তোমাকে তো চিনতে পারছি না! তুমি কে?' "
-                            "Ask their name and relationship to Palash. "
-                            "If they introduce themselves, use 'memorize_person' to save their face and name."
+                            "A new person appeared! You don't know them. "
+                            "In Bengali, greet warmly: 'তোমাকে তো চিনতে পারছি না! তুমি কে?' "
+                            "Ask their name. If they are looking for Palash, say he's not here and ask if they want to leave a message. "
+                            "If yes, use 'leave_message' tool. Also use 'memorize_person' to save their name."
                         ),
                         (
                             "Someone unfamiliar is standing in front of you. Be curious! "
-                            "In Bengali, say something like 'আরে, নতুন কেউ এসেছে! পরিচয়টা দাও তো!' "
-                            "Ask who they are and if they'd like you to remember them. "
+                            "In Bengali, say 'আরে, নতুন কেউ এসেছে! পরিচয়টা দাও তো!' "
+                            "Subtly ask if they came to see Palash or have a message for him. "
                             "When they tell their name, call 'memorize_person'."
                         ),
                         (
                             "A stranger appeared! Act naturally surprised and curious. "
                             "In Bengali, say 'ওহ, তোমাকে তো আগে দেখিনি! কী নাম তোমার?' "
-                            "Ask their name and relation to your owner Palash. "
+                            "Ask their name and if they need to leave a message for your owner Palash (who is away). "
                             "Use 'memorize_person' tool once they introduce themselves."
                         ),
                         (
                             "You see an unknown face! Greet them in Bengali with friendly curiosity. "
                             "Say something like 'এই যে! তুমি নতুন মুখ! আমি তো তোমাকে চিনি না!' "
-                            "Ask their name. If they share it, save with 'memorize_person'. "
+                            "Ask their name and if they have a message for Palash. If they share their name, save with 'memorize_person'. "
                             "CRITICAL RULE: Do not compliment their appearance unless you clearly see something very distinct."
                         ),
                     ]
@@ -845,3 +865,8 @@ class LumiBrain:
             return f"Successfully displayed procedural {animal} animation and played synthesized sound. Acknowledge this playfully."
         else:
             return f"Successfully displayed procedural {animal} animation. Make a cute {animal} sound with your voice now!"
+
+    def _tool_leave_message(self, recipient_name: str, sender_name: str, message_text: str) -> str:
+        if not hasattr(self.memory, "leave_message"):
+            return "Error: Messaging system not initialized."
+        return self.memory.leave_message(recipient_name, sender_name, message_text)
