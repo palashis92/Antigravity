@@ -75,6 +75,13 @@ class LumiBrain:
         self.chess_vision = ChessVision()
 
         # Audio & Speech Subsystems
+        from ..audio.vad import VoiceActivityDetector
+        from ..audio.speaker_id import SpeakerIdentifier
+        self.vad = VoiceActivityDetector(aggressiveness=2)
+        self.speaker_id = SpeakerIdentifier(self.memory, similarity_threshold=0.75)
+        self._current_speaker: Optional[str] = None
+        self._voice_buffer: bytearray = bytearray()  # Buffer for voice enrollment
+        self._enrolling_voice_for: Optional[str] = None  # Person ID being enrolled
         
         self.tts = BanglaTTS()
 
@@ -322,9 +329,13 @@ class LumiBrain:
         return math.sqrt(sum_sq / count)
 
     def _audio_loop(self) -> None:
-        logger.info("Starting Audio Loop (Streaming to Gemini Live)")
+        logger.info("Starting Audio Loop (Streaming to Gemini Live + VAD + Speaker ID)")
         ENERGY_THRESHOLD = 400
         _debug_audio_frames = 0
+
+        # Wire up VAD callbacks
+        self.vad.set_on_utterance_complete(self._on_speech_utterance)
+        self.vad.set_on_overlap_detected(self._on_overlap_detected)
         
         while self._running:
             chunk = self.mic.read_chunk(1024)
@@ -332,20 +343,80 @@ class LumiBrain:
                 time.sleep(0.01)
                 continue
 
-            # Push audio to Gemini Live / Realtime engine if supported
+            # 1. Always push audio to Gemini Live (uninterrupted stream)
             if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
                 self.realtime_voice.push_audio_chunk(chunk)
 
+            # 2. Feed chunk through VAD pipeline
+            from ..audio.vad import SpeechEvent
+            event = self.vad.process_chunk(chunk)
+
+            # 3. Collect audio for voice enrollment if active
+            if self._enrolling_voice_for:
+                self._voice_buffer.extend(chunk)
+
+            # 4. Eye animation on speech detection
             energy = self._compute_rms(chunk)
             _debug_audio_frames += 1
             if _debug_audio_frames % 200 == 0:
                 logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
 
-            if energy > ENERGY_THRESHOLD:
+            if event == SpeechEvent.SPEECH_START or energy > ENERGY_THRESHOLD:
                 if self.state.current_state == BehaviorState.IDLE:
                     self.eyes.set_expression("curious")
+
+            # 5. Overlap detection (check periodically during speech)
+            if event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:
+                # Count visible faces from last perception loop
+                num_faces = len(getattr(self, '_last_detected_faces', []))
+                self.vad.detect_overlap(num_faces)
             
             time.sleep(0.01)
+
+    def _on_speech_utterance(self, audio_bytes: bytes, duration: float) -> None:
+        """Called by VAD when a complete speech utterance is ready.
+        
+        Runs speaker identification in a background thread to avoid
+        blocking the audio loop.
+        """
+        def _identify():
+            # If we're enrolling a voice, skip identification
+            if self._enrolling_voice_for:
+                return
+
+            if not self.speaker_id.is_available():
+                return
+
+            speaker_name, confidence = self.speaker_id.identify_speaker(audio_bytes)
+            if speaker_name and confidence >= 0.75:
+                if speaker_name != self._current_speaker:
+                    self._current_speaker = speaker_name
+                    logger.info(f"🎙️ Active speaker changed to: {speaker_name}")
+                    # Tell Gemini who is speaking
+                    if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
+                        self.realtime_voice.inject_context(
+                            f"SPEAKER UPDATE: The person currently speaking is {speaker_name}. "
+                            f"Address them by name when responding."
+                        )
+            else:
+                if self._current_speaker is not None:
+                    self._current_speaker = None
+                    logger.debug("🎙️ Speaker not recognized (unknown voice)")
+
+        thread = threading.Thread(target=_identify, daemon=True, name="SpeakerID_Worker")
+        thread.start()
+
+    def _on_overlap_detected(self) -> None:
+        """Called by VAD when overlapping speech from multiple people is detected."""
+        logger.info("🔊 Overlapping speech detected! Asking people to take turns.")
+        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
+            import random
+            overlap_responses = [
+                "Multiple people are talking at once! Say in Bengali: 'আরে আরে, একজন একজন করে বলো! আমি তো সবার কথা একসাথে ধরতে পারি না!' Then laugh friendly.",
+                "You hear overlapping voices. Say in Bengali: 'একটু থামো থামো! কে আগে বলবে?' with a playful tone.",
+                "Too many voices at once! Say in Bengali: 'ভাই একসাথে বললে তো আমি বুঝি না! একজন বলো আগে!' Keep it humorous.",
+            ]
+            self.realtime_voice.inject_context(random.choice(overlap_responses))
 
     def start_loops(self) -> None:
         """Starts the perception, audio listening, and Realtime Voice background threads."""
@@ -503,7 +574,7 @@ class LumiBrain:
     # Realtime Tools Implementation
     # =========================================================================
     def _tool_memorize_person(self, name: str, relationship: str = "guest", notes: str = "") -> str:
-        """Saves the pending unknown face with detailed metadata."""
+        """Saves the pending unknown face with detailed metadata and starts voice enrollment."""
         encoding = self.face_service.get_pending_face()
         if not encoding:
             return "No unknown face is currently in view to memorize. Please ask them to look at the camera."
@@ -521,7 +592,30 @@ class LumiBrain:
             if notes:
                 person.notes = notes
             self.memory.update_person(person)
-            return f"Successfully memorized the face of {name} ({relationship})."
+            
+            # Start voice enrollment in background
+            # Collect audio for 5 seconds to build a voice profile
+            self._voice_buffer = bytearray()
+            self._enrolling_voice_for = person.id
+
+            def _finish_enrollment():
+                time.sleep(5.0)  # Collect 5 seconds of audio
+                audio_data = bytes(self._voice_buffer)
+                self._enrolling_voice_for = None
+                self._voice_buffer = bytearray()
+                if len(audio_data) > 16000 * 2 * 1.5:  # At least 1.5 sec
+                    success = self.speaker_id.enroll_voice(person.id, audio_data)
+                    if success:
+                        logger.info(f"🎙️ Voice profile saved for {name}")
+                    else:
+                        logger.warning(f"Voice enrollment failed for {name}")
+
+            enrollment_thread = threading.Thread(
+                target=_finish_enrollment, daemon=True, name=f"VoiceEnroll_{name}"
+            )
+            enrollment_thread.start()
+
+            return f"Successfully memorized the face of {name} ({relationship}). Also enrolling their voice profile..."
         return f"Failed to save {name} to database."
 
     def _tool_memorize_fact(self, fact: str, person_name: Optional[str] = None) -> str:

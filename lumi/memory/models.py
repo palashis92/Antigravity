@@ -48,6 +48,17 @@ class Person:
         else:
             self.metadata["face_embedding"] = value
 
+    @property
+    def voice_embedding(self) -> Optional[List[float]]:
+        return self.metadata.get("voice_embedding")
+
+    @voice_embedding.setter
+    def voice_embedding(self, value: Optional[List[float]]) -> None:
+        if value is None:
+            self.metadata.pop("voice_embedding", None)
+        else:
+            self.metadata["voice_embedding"] = value
+
     def to_dict(self) -> Dict[str, Any]:
         d = asdict(self)
         d["consent_status"] = self.consent_status.value
