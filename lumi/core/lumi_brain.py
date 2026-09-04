@@ -484,6 +484,12 @@ class LumiBrain:
         gaze_y = (face.center[1] / self.settings.vision.frame_height) * 2.0 - 1.0
         self.eyes.set_gaze(gaze_x, gaze_y)
 
+        # Steer microphone beamformer towards the active face
+        if hasattr(self.mic, 'backend') and hasattr(self.mic.backend, 'spatial_processor'):
+            spatial = self.mic.backend.spatial_processor
+            if spatial:
+                spatial.steer_towards_face(face.center[0], self.settings.vision.frame_width)
+
         if face.is_known and face.person is not None:
             person = face.person
             self.active_person = person
