@@ -33,7 +33,16 @@ class PCA9685ServoDriver(ServoDriverBase):
             import busio  # type: ignore
             from adafruit_pca9685 import PCA9685  # type: ignore
 
-            i2c = busio.I2C(board.SCL, board.SDA)
+            if self.i2c_bus == 1:
+                i2c = busio.I2C(board.SCL, board.SDA)
+            else:
+                try:
+                    from adafruit_extended_bus import ExtendedI2C as I2C
+                    i2c = I2C(self.i2c_bus)
+                except ImportError:
+                    logger.error("Please run: pip3 install adafruit-extended-bus")
+                    raise
+
             self._pca = PCA9685(i2c, address=self.i2c_address)
             self._pca.frequency = self.pwm_frequency_hz  # type: ignore
             self._is_hardware = True

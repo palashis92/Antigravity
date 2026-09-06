@@ -17,6 +17,7 @@ import tests.test_memory as tm
 import tests.test_motion as tmot
 import tests.test_state_manager as tsm
 import tests.test_vision as tv
+import tests.test_anjum_mode as tanjum
 
 
 class DummyMonkeypatch:
@@ -80,6 +81,14 @@ def main():
         # AI & Conversation
         ("test_tool_registry", tai.test_tool_registry, ()),
         ("test_conversation_engine_responses", tai.test_conversation_engine_responses, ()),
+        # Anjum Companion & Speech-Therapy Mode
+        ("test_anjum_state_transitions", tanjum.test_anjum_state_transitions, ()),
+        ("test_companion_activation_and_deactivation", tanjum.test_companion_activation_and_deactivation, ()),
+        ("test_absence_timeout", tanjum.test_absence_timeout, ()),
+        ("test_proactive_stimulus_cooldown", tanjum.test_proactive_stimulus_cooldown, ()),
+        ("test_counting_game_bengali_digits", tanjum.test_counting_game_bengali_digits, ()),
+        ("test_counting_game_english_digits", tanjum.test_counting_game_english_digits, ()),
+        ("test_identity_and_praise_speech", tanjum.test_identity_and_praise_speech, ()),
     ]
 
     for name, fn, args in tests_to_run:

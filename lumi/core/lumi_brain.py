@@ -99,6 +99,11 @@ class LumiBrain:
         self.whatsapp = WhatsAppClient()
         self.refine_message = refine_whatsapp_message
 
+        # Companion Subsystem (Speech Therapy for Anjum)
+        from ..companion.anjum_companion import AnjumCompanionEngine
+        self.anjum_companion = AnjumCompanionEngine(stimulus_cooldown=7.0)
+        self._last_anjum_seen_time = 0.0
+
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
         self.tools.register("memorize_person", self._tool_memorize_person, "CALL THIS ONLY when the user explicitly introduces themselves (e.g., 'My name is X') or asks you to remember their name. Do NOT call this for random names or entities mentioned in conversation.", {
@@ -374,7 +379,25 @@ class LumiBrain:
             if self.active_person and (now - self._last_face_seen_time > 30.0):
                 logger.info(f"Active person '{self.active_person.name}' timed out (no face for 30s).")
                 self.active_person = None
-                
+
+            # Anjum Mode: 10s absence timeout & proactive stimulation
+            if self.state.current_state == BehaviorState.ANJUM_MODE:
+                if self.anjum_companion.is_timeout(now, timeout_sec=10.0):
+                    logger.info("👧 Anjum not seen for > 10 seconds. Exiting Anjum Mode.")
+                    self._exit_anjum_mode()
+                else:
+                    is_speaking = now < getattr(self.realtime_voice, "_speaker_active_until", 0.0)
+                    if not is_speaking:
+                        stimulus = self.anjum_companion.check_proactive_stimulus(now)
+                        if stimulus:
+                            logger.info(f"Proactive Anjum stimulus: {stimulus}")
+                            self.eyes.set_expression("excited")
+                            audio_path = self.tts.synthesize(stimulus)
+                            if audio_path:
+                                self.speaker.play_file(audio_path, block=False)
+                            if hasattr(self.realtime_voice, "inject_context"):
+                                self.realtime_voice.inject_context(f"[PROACTIVE CHILD PROMPT SPOKEN: '{stimulus}']")
+
             time.sleep(0.1)
 
     def _compute_rms(self, pcm_data: bytes) -> float:
@@ -446,6 +469,28 @@ class LumiBrain:
             # If meeting mode is active, handle utterance logging silently
             if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
                 self._process_meeting_utterance(audio_bytes, duration)
+                return
+
+            # If Anjum Mode is active, handle speech with speech-therapy companion logic
+            if self.state.current_state == BehaviorState.ANJUM_MODE:
+                if hasattr(self, "stt"):
+                    try:
+                        text = self.stt.transcribe_pcm_bytes(audio_bytes)
+                        if text:
+                            logger.info(f"👧 Anjum utterance transcribed: '{text}'")
+                            reply = self.anjum_companion.handle_anjum_speech(text)
+                            if reply:
+                                self.eyes.set_expression("excited")
+                                audio_path = self.tts.synthesize(reply)
+                                if audio_path:
+                                    self.speaker.play_file(audio_path, block=False)
+                                if hasattr(self.realtime_voice, "inject_context"):
+                                    self.realtime_voice.inject_context(
+                                        f"[CHILD SPOKE: '{text}'. LUMI REPLIED ENTHUSIASTICALLY: '{reply}']"
+                                    )
+                                return
+                    except Exception as e:
+                        logger.debug(f"Anjum speech handling error: {e}")
                 return
 
             if not self.speaker_id.is_available():
@@ -615,6 +660,25 @@ class LumiBrain:
 
         # In meeting mode, keep tracking face & gaze silently, but do not interrupt with greetings
         if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
+            return
+
+        # Check for Anjum (Speech-Therapy & Companion Mode)
+        name_lower = face.person.name.lower().strip() if (face.is_known and face.person) else ""
+        if "anjum" in name_lower or "আঞ্জুম" in name_lower:
+            now_t = time.time()
+            self._last_anjum_seen_time = now_t
+            self._last_face_seen_time = now_t
+            self.anjum_companion.mark_seen(now_t)
+            self.active_person = face.person
+            if self.state.current_state != BehaviorState.ANJUM_MODE:
+                self._enter_anjum_mode()
+            return
+        elif self.state.current_state == BehaviorState.ANJUM_MODE:
+            # While in Anjum mode, any face visible maintains her presence timer
+            now_t = time.time()
+            self._last_anjum_seen_time = now_t
+            self._last_face_seen_time = now_t
+            self.anjum_companion.mark_seen(now_t)
             return
 
         if face.is_known and face.person is not None:
@@ -1277,4 +1341,43 @@ class LumiBrain:
             return "মিটিংয়ের কোনো রেকর্ড পাওয়া যায়নি।"
         except Exception as e:
             return f"PDF রিপোর্ট তৈরিতে ত্রুটি: {e}"
+
+    # =========================================================================
+    # Anjum Mode (Speech-Therapy & Companion Mode) Helpers
+    # =========================================================================
+    def _enter_anjum_mode(self) -> None:
+        """Switches LUMI into Anjum's speech-therapy & companion mode."""
+        logger.info("👧 Entering ANJUM_MODE!")
+        self.state.transition_to(BehaviorState.ANJUM_MODE, reason="anjum_detected")
+        self.eyes.set_expression("excited")
+        greeting = self.anjum_companion.activate()
+
+        # Inject specialized child therapy prompt into Gemini Live
+        if hasattr(self.realtime_voice, "inject_context"):
+            from ..ai.prompts import ANJUM_SYSTEM_PROMPT_BN
+            self.realtime_voice.inject_context(
+                f"[SYSTEM DIRECTIVE: ANJUM MODE ACTIVATED]\n{ANJUM_SYSTEM_PROMPT_BN}\n"
+                "Say greeting with high excitement and love in Bengali!"
+            )
+
+        audio_path = self.tts.synthesize(greeting)
+        if audio_path:
+            self.speaker.play_file(audio_path, block=False)
+
+    def _exit_anjum_mode(self) -> None:
+        """Exits Anjum mode after 10-second timeout and returns to IDLE."""
+        logger.info("👧 Exiting ANJUM_MODE (timeout / left view).")
+        goodbye = self.anjum_companion.deactivate()
+        self.state.transition_to(BehaviorState.IDLE, reason="anjum_left")
+        self.eyes.set_expression("neutral")
+
+        audio_path = self.tts.synthesize(goodbye)
+        if audio_path:
+            self.speaker.play_file(audio_path, block=False)
+
+        if hasattr(self.realtime_voice, "inject_context"):
+            self.realtime_voice.inject_context(
+                "[SYSTEM DIRECTIVE: Anjum has left the camera view. Exited ANJUM MODE. Returning to normal adult conversation mode.]"
+            )
+
 

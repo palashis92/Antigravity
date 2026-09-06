@@ -63,6 +63,7 @@ class ReminderScheduler:
                             "title": rem.title,
                             "description": rem.description,
                             "person_id": rem.person_id,
+                            "remind_at": rem.remind_at,
                         },
                         source="reminder_scheduler",
                     )

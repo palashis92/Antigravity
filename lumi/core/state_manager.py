@@ -27,6 +27,7 @@ class BehaviorState(str, Enum):
     ERROR = "ERROR"
     SLEEP = "SLEEP"
     MEETING = "MEETING"
+    ANJUM_MODE = "ANJUM_MODE"
 
 
 # Default mapping from behavior state to corresponding eye expression
@@ -44,6 +45,7 @@ STATE_EYE_EXPRESSIONS: Dict[BehaviorState, str] = {
     BehaviorState.ERROR: "sad",
     BehaviorState.SLEEP: "sleepy",
     BehaviorState.MEETING: "listening",
+    BehaviorState.ANJUM_MODE: "excited",
 }
 
 
@@ -61,6 +63,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.ERROR,
         BehaviorState.SLEEP,
         BehaviorState.MEETING,
+        BehaviorState.ANJUM_MODE,
     },
     BehaviorState.OBSERVING: {
         BehaviorState.IDLE,
@@ -69,12 +72,14 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.VISION_ANALYSIS,
         BehaviorState.ERROR,
         BehaviorState.SLEEP,
+        BehaviorState.ANJUM_MODE,
     },
     BehaviorState.GREETING: {
         BehaviorState.IDLE,
         BehaviorState.LISTENING,
         BehaviorState.SPEAKING,
         BehaviorState.ERROR,
+        BehaviorState.ANJUM_MODE,
     },
     BehaviorState.LISTENING: {
         BehaviorState.IDLE,
@@ -84,6 +89,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.CHESS_ANALYSIS,
         BehaviorState.SEARCHING,
         BehaviorState.ERROR,
+        BehaviorState.ANJUM_MODE,
     },
     BehaviorState.THINKING: {
         BehaviorState.SPEAKING,
@@ -98,6 +104,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.LISTENING,
         BehaviorState.OBSERVING,
         BehaviorState.ERROR,
+        BehaviorState.ANJUM_MODE,
     },
     BehaviorState.SEARCHING: {
         BehaviorState.THINKING,
@@ -134,6 +141,12 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
     },
     BehaviorState.MEETING: {
         BehaviorState.IDLE,
+        BehaviorState.ERROR,
+    },
+    BehaviorState.ANJUM_MODE: {
+        BehaviorState.IDLE,
+        BehaviorState.SPEAKING,
+        BehaviorState.LISTENING,
         BehaviorState.ERROR,
     },
 }
