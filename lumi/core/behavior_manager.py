@@ -52,8 +52,8 @@ class BehaviorManager:
     def on_person_spotted(self, person_name: str, is_known: bool) -> None:
         """Handle visual detection of a person."""
         curr = self.state_manager.current_state
-        if curr in (BehaviorState.SPEAKING, BehaviorState.THINKING, BehaviorState.VISION_ANALYSIS):
-            return  # Do not interrupt busy states
+        if curr in (BehaviorState.SPEAKING, BehaviorState.THINKING, BehaviorState.VISION_ANALYSIS, BehaviorState.MEETING):
+            return  # Do not interrupt busy or meeting states
 
         now = time.time()
         last_interact = self._last_interaction_times.get(person_name, 0)
@@ -91,6 +91,9 @@ class BehaviorManager:
                 
     def on_object_detected(self, object_name: str) -> None:
         """Handle continuous object detection."""
+        curr = self.state_manager.current_state
+        if curr in (BehaviorState.SPEAKING, BehaviorState.THINKING, BehaviorState.VISION_ANALYSIS, BehaviorState.MEETING):
+            return
         now = time.time()
         if self._current_object == object_name:
             if self._object_start_time and (now - self._object_start_time) > 5.0:

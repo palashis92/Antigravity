@@ -24,6 +24,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         import queue
         self.alsa_device = alsa_device
         self.volume = volume
+        self._muted = False
         self._current_process: Optional[subprocess.Popen] = None
         self._stream_queue: queue.Queue = queue.Queue()
         self._stream_running = True
@@ -129,7 +130,29 @@ class I2SSpeakerBackend(SpeakerBackendBase):
 
         return input_path
 
+    def set_muted(self, muted: bool) -> None:
+        """Hardware/software mute control for the speaker."""
+        self._muted = muted
+        if muted:
+            self.stop()
+            # Drain any pending stream chunks
+            import queue
+            while not self._stream_queue.empty():
+                try:
+                    self._stream_queue.get_nowait()
+                except queue.Empty:
+                    break
+        logger.info(f"Speaker mute state changed to: {muted}")
+
+    @property
+    def is_muted(self) -> bool:
+        return self._muted
+
     def play_audio_file(self, file_path: str, block: bool = True) -> bool:
+        if self._muted:
+            logger.debug("Speaker is muted, dropping play_audio_file.")
+            return False
+
         if not os.path.exists(file_path):
             logger.error(f"Audio file not found: '{file_path}'")
             return False
@@ -189,6 +212,8 @@ class I2SSpeakerBackend(SpeakerBackendBase):
 
     def play_audio_stream(self, audio_bytes: bytes, sample_rate: int = 24000) -> bool:
         """Stream raw 16-bit PCM audio directly to MAX98357A I2S DAC (Non-blocking)."""
+        if self._muted:
+            return False
         self._stream_queue.put((audio_bytes, sample_rate))
         return True
 
@@ -210,14 +235,28 @@ class SpeakerInterface:
 
     def __init__(self, backend: Optional[SpeakerBackendBase] = None) -> None:
         self.backend: SpeakerBackendBase = backend or MockSpeakerBackend()
+        self._muted = False
 
     def set_backend(self, backend: SpeakerBackendBase) -> None:
         self.backend = backend
 
+    def set_muted(self, muted: bool) -> None:
+        self._muted = muted
+        if hasattr(self.backend, "set_muted"):
+            self.backend.set_muted(muted)
+
+    @property
+    def is_muted(self) -> bool:
+        return getattr(self.backend, "is_muted", self._muted)
+
     def play_file(self, file_path: str, block: bool = True) -> bool:
+        if self.is_muted:
+            return False
         return self.backend.play_audio_file(file_path, block=block)
 
     def play_stream(self, audio_bytes: bytes, sample_rate: int = 24000) -> bool:
+        if self.is_muted:
+            return False
         return self.backend.play_audio_stream(audio_bytes, sample_rate=sample_rate)
 
     def stop(self) -> None:

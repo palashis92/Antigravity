@@ -101,3 +101,25 @@ CREATE TRIGGER IF NOT EXISTS facts_fts_au AFTER UPDATE ON facts BEGIN
     INSERT INTO facts_fts(facts_fts, rowid, fact_text) VALUES('delete', old.rowid, old.fact_text);
     INSERT INTO facts_fts(rowid, fact_text) VALUES (new.rowid, new.fact_text);
 END;
+
+-- =========================================================================
+-- Meeting Mode Schema
+-- Stores recorded meeting sessions, transcripts, speaker lists & analysis
+-- =========================================================================
+
+CREATE TABLE IF NOT EXISTS meetings (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '',
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_sec REAL DEFAULT 0.0,
+    transcript TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL DEFAULT '',
+    key_points TEXT NOT NULL DEFAULT '[]',
+    action_items TEXT NOT NULL DEFAULT '[]',
+    participants TEXT NOT NULL DEFAULT '[]',
+    metadata TEXT NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX IF NOT EXISTS idx_meetings_started ON meetings(started_at);
+

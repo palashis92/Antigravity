@@ -85,6 +85,12 @@ class LumiBrain:
         
         self.tts = BanglaTTS()
 
+        # Speech-to-Text & Meeting Subsystems
+        from ..meeting import MeetingManager
+        from ..speech.stt import BanglaSTT
+        self.meeting_manager = MeetingManager(self.memory.db)
+        self.stt = BanglaSTT()
+
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
         self.tools.register("memorize_person", self._tool_memorize_person, "CALL THIS ONLY when the user explicitly introduces themselves (e.g., 'My name is X') or asks you to remember their name. Do NOT call this for random names or entities mentioned in conversation.", {
@@ -143,6 +149,26 @@ class LumiBrain:
                 "message_text": {"type": "string"}
             },
             "required": ["recipient_name", "sender_name", "message_text"]
+        })
+        self.tools.register("start_meeting_mode", self._tool_start_meeting_mode, "Activate Meeting Mode. Call this when the user says to start a meeting, enter meeting mode, or says they are starting a discussion. LUMI will remain silent, listen carefully to all attendees, and take detailed notes.", {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Optional title or topic of the meeting."}
+            }
+        })
+        self.tools.register("stop_meeting_mode", self._tool_stop_meeting_mode, "Stop and conclude Meeting Mode. Call this when the user says the meeting is over, asks to stop meeting mode, or says 'meeting shesh'.", {
+            "type": "object",
+            "properties": {}
+        })
+        self.tools.register("analyze_meeting", self._tool_analyze_meeting, "Analyze the recorded meeting and provide a detailed, super-intelligent summary covering: who spoke, key points, decisions, and action items in Bengali. Call this when the user asks what happened in the meeting or asks for meeting analysis.", {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Specific question or request about the meeting (optional)."}
+            }
+        })
+        self.tools.register("generate_meeting_report_pdf", self._tool_generate_meeting_report_pdf, "Generate a PDF document report of the latest meeting summary and minutes.", {
+            "type": "object",
+            "properties": {}
         })
         
         from ..ai.gemini_live import GeminiLiveClient
@@ -384,6 +410,11 @@ class LumiBrain:
             if self._enrolling_voice_for:
                 return
 
+            # If meeting mode is active, handle utterance logging silently
+            if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
+                self._process_meeting_utterance(audio_bytes, duration)
+                return
+
             if not self.speaker_id.is_available():
                 return
 
@@ -406,8 +437,67 @@ class LumiBrain:
         thread = threading.Thread(target=_identify, daemon=True, name="SpeakerID_Worker")
         thread.start()
 
+    def _process_meeting_utterance(self, audio_bytes: bytes, duration: float) -> None:
+        """Process speech segment during active meeting mode."""
+        # 1. Identify speaker
+        speaker_name = "Unknown"
+        confidence = 0.0
+        if self.speaker_id.is_available():
+            s_name, s_conf = self.speaker_id.identify_speaker(audio_bytes)
+            if s_name and s_conf >= 0.70:
+                speaker_name = s_name
+                confidence = s_conf
+
+        # 2. Estimate direction of arrival from ReSpeaker 2-Mic HAT if speaker unknown
+        doa = None
+        if hasattr(self.mic, 'backend') and hasattr(self.mic.backend, 'spatial_processor'):
+            spatial = self.mic.backend.spatial_processor
+            if spatial:
+                doa = spatial.current_doa
+
+        if speaker_name == "Unknown":
+            if doa is not None:
+                if doa < -20:
+                    speaker_name = "বক্তা (বামদিক)"
+                elif doa > 20:
+                    speaker_name = "বক্তা (ডানদিক)"
+                else:
+                    speaker_name = "বক্তা (মাঝখান)"
+            else:
+                speaker_name = "বক্তা"
+
+        # 3. Transcribe speech using Whisper STT
+        text = ""
+        if hasattr(self, "stt"):
+            try:
+                text = self.stt.transcribe_pcm_bytes(audio_bytes)
+            except Exception as e:
+                logger.debug(f"Meeting STT error: {e}")
+
+        if not text:
+            return
+
+        # 4. Local voice command check: Stop meeting
+        clean = text.lower().strip()
+        stop_triggers = ["মিটিং শেষ", "মিটিং মোড বন্ধ", "মিটিং বন্ধ", "মিটিং সমাপ্ত", "stop meeting", "end meeting"]
+        if any(trig in clean for trig in stop_triggers):
+            logger.info(f"🛑 Meeting stop trigger detected in speech: '{text}'")
+            self._tool_stop_meeting_mode()
+            return
+
+        # 5. Append to active meeting record
+        self.meeting_manager.add_utterance(
+            speaker=speaker_name,
+            text=text,
+            doa_deg=doa,
+            confidence=confidence,
+        )
+
     def _on_overlap_detected(self) -> None:
         """Called by VAD when overlapping speech from multiple people is detected."""
+        if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
+            return  # Silent in meeting mode
+
         logger.info("🔊 Overlapping speech detected! Asking people to take turns.")
         if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
             import random
@@ -489,6 +579,10 @@ class LumiBrain:
             spatial = self.mic.backend.spatial_processor
             if spatial:
                 spatial.steer_towards_face(face.center[0], self.settings.vision.frame_width)
+
+        # In meeting mode, keep tracking face & gaze silently, but do not interrupt with greetings
+        if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
+            return
 
         if face.is_known and face.person is not None:
             person = face.person
@@ -970,3 +1064,89 @@ class LumiBrain:
         if not hasattr(self.memory, "leave_message"):
             return "Error: Messaging system not initialized."
         return self.memory.leave_message(recipient_name, sender_name, message_text)
+
+    def _tool_start_meeting_mode(self, title: str = "") -> str:
+        """Activate silent meeting mode."""
+        if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
+            return "মিটিং মোড ইতিমধ্যে চালু রয়েছে। আমি সব কথা শুনছি এবং রেকর্ড করছি।"
+
+        session = self.meeting_manager.start_meeting(title=title)
+        self.state.transition_to(BehaviorState.MEETING, reason="start_meeting_mode")
+        self.eyes.set_expression("listening")
+
+        # Notify Gemini Live of silent meeting mode
+        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
+            self.realtime_voice.inject_context(
+                "[CRITICAL SYSTEM DIRECTIVE: MEETING MODE IS NOW ACTIVE. "
+                "You are an automated silent stenographer. "
+                "DO NOT EMIT ANY SPEECH OR SOUND. The attendees are having a meeting in the room. "
+                "Listen attentively. When someone explicitly says 'মিটিং শেষ' or 'মিটিং মোড বন্ধ করো', "
+                "call the 'stop_meeting_mode' tool immediately.]"
+            )
+
+        # Spoken confirmation before going completely silent
+        confirm_msg = "ঠিক আছে, আমি মিটিং মোড চালু করলাম। আপনারা নিশ্চিন্তে আলোচনা করুন, আমি সম্পূর্ণ নীরব থেকে সব নোট নিচ্ছি।"
+        audio_path = self.tts.synthesize(confirm_msg)
+        if audio_path:
+            self.speaker.play_file(audio_path, block=True)
+
+        # Hardware-level silence
+        self.speaker.set_muted(True)
+        return f"Meeting Mode activated: '{session.title}'. LUMI is now completely silent, recording all discussion."
+
+    def _tool_stop_meeting_mode(self) -> str:
+        """Stop meeting mode and unmute speaker."""
+        if not (getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active()):
+            return "বর্তমানে কোনো মিটিং মোড সক্রিয় নেই।"
+
+        session = self.meeting_manager.stop_meeting()
+        self.speaker.set_muted(False)
+        self.state.transition_to(BehaviorState.IDLE, reason="stop_meeting_mode")
+        self.eyes.set_expression("neutral")
+
+        utterances_count = len(session.utterances) if session else 0
+        duration_min = round(session.duration_sec / 60.0, 1) if session else 0.0
+
+        # Announce meeting completion
+        end_msg = f"মিটিং শেষ হয়েছে। মোট {duration_min} মিনিটের মিটিংয়ে {utterances_count}টি বক্তব্য সফলভাবে রেকর্ড করা হয়েছে। আপনারা চাইলে আমি এখনই সম্পূর্ণ মিটিংয়ের চমৎকার বিশ্লেষণ বা সারসংক্ষেপ বলতে পারি।"
+        audio_path = self.tts.synthesize(end_msg)
+        if audio_path:
+            self.speaker.play_file(audio_path, block=True)
+
+        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
+            self.realtime_voice.inject_context(
+                f"[SYSTEM ALERT: Meeting mode has ENDED. {utterances_count} statements recorded over {duration_min} minutes. "
+                "You may now speak normally. If the user asks what happened in the meeting, call the 'analyze_meeting' tool.]"
+            )
+
+        return end_msg
+
+    def _tool_analyze_meeting(self, query: str = "") -> str:
+        """Analyze the latest recorded meeting with executive-level intelligence in Bengali."""
+        if not hasattr(self, "meeting_manager"):
+            return "মিটিং ম্যানেজার পাওয়া যায়নি।"
+
+        # Indicate thinking on eyes
+        self.eyes.set_expression("thinking")
+        try:
+            analysis = self.meeting_manager.analyze_meeting(user_query=query)
+            self.eyes.set_expression("speaking")
+            return analysis
+        except Exception as e:
+            self.eyes.set_expression("sad")
+            logger.error(f"Error analyzing meeting: {e}")
+            return f"মিটিং বিশ্লেষণ করতে সাময়িক সমস্যা হয়েছে: {e}"
+
+    def _tool_generate_meeting_report_pdf(self) -> str:
+        """Generate PDF document of the meeting minutes and action items."""
+        if not hasattr(self, "meeting_manager"):
+            return "মিটিং ম্যানেজার পাওয়া যায়নি।"
+
+        try:
+            pdf_path = self.meeting_manager.generate_pdf_report()
+            if pdf_path:
+                return f"মিটিংয়ের পূর্ণাঙ্গ কার্যবিবরণী ও অ্যানালাইসিসের একটি PDF রিপোর্ট তৈরি করা হয়েছে: {pdf_path}"
+            return "মিটিংয়ের কোনো রেকর্ড পাওয়া যায়নি।"
+        except Exception as e:
+            return f"PDF রিপোর্ট তৈরিতে ত্রুটি: {e}"
+

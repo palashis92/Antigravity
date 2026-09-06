@@ -26,6 +26,7 @@ class BehaviorState(str, Enum):
     REMINDER = "REMINDER"
     ERROR = "ERROR"
     SLEEP = "SLEEP"
+    MEETING = "MEETING"
 
 
 # Default mapping from behavior state to corresponding eye expression
@@ -42,6 +43,7 @@ STATE_EYE_EXPRESSIONS: Dict[BehaviorState, str] = {
     BehaviorState.REMINDER: "excited",
     BehaviorState.ERROR: "sad",
     BehaviorState.SLEEP: "sleepy",
+    BehaviorState.MEETING: "listening",
 }
 
 
@@ -58,6 +60,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.REMINDER,
         BehaviorState.ERROR,
         BehaviorState.SLEEP,
+        BehaviorState.MEETING,
     },
     BehaviorState.OBSERVING: {
         BehaviorState.IDLE,
@@ -128,6 +131,10 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.IDLE,
         BehaviorState.OBSERVING,
         BehaviorState.GREETING,
+    },
+    BehaviorState.MEETING: {
+        BehaviorState.IDLE,
+        BehaviorState.ERROR,
     },
 }
 
