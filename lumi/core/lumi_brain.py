@@ -91,6 +91,14 @@ class LumiBrain:
         self.meeting_manager = MeetingManager(self.memory.db)
         self.stt = BanglaSTT()
 
+        # Music & WhatsApp Integrations Subsystems
+        from ..audio.music_player import MusicPlayer
+        from ..integrations.whatsapp import WhatsAppClient
+        from ..integrations.message_polisher import refine_whatsapp_message
+        self.music_player = MusicPlayer(self.speaker)
+        self.whatsapp = WhatsAppClient()
+        self.refine_message = refine_whatsapp_message
+
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
         self.tools.register("memorize_person", self._tool_memorize_person, "CALL THIS ONLY when the user explicitly introduces themselves (e.g., 'My name is X') or asks you to remember their name. Do NOT call this for random names or entities mentioned in conversation.", {
@@ -123,6 +131,17 @@ class LumiBrain:
             },
             "required": ["title", "remind_at_iso"]
         })
+        self.tools.register("play_music", self._tool_play_music, "Play a requested song or music track by title/query (e.g. 'Stereo Love'). Searches YouTube, caches and streams through speaker.", {
+            "type": "object",
+            "properties": {
+                "song_name": {"type": "string", "description": "Name or query of the song to play."}
+            },
+            "required": ["song_name"]
+        })
+        self.tools.register("stop_music", self._tool_stop_music, "Stop currently playing music or song.", {
+            "type": "object",
+            "properties": {}
+        })
         self.tools.register("show_animal_animation", self._tool_show_animal_animation, "Show an animal animation/image on your screen. Call this when the user asks how an animal sounds or acts, while SIMULTANEOUSLY using your voice to mimic the animal sound.", {
             "type": "object",
             "properties": {
@@ -133,8 +152,22 @@ class LumiBrain:
         self.tools.register("send_email", self._tool_send_email, "Send an email.", {
             "type": "object", "properties": {"to_address": {"type": "string"}, "subject": {"type": "string"}, "message": {"type": "string"}}, "required": ["to_address", "subject", "message"]
         })
-        self.tools.register("send_whatsapp", self._tool_send_whatsapp, "Send a WhatsApp message.", {
-            "type": "object", "properties": {"phone_number": {"type": "string"}, "message": {"type": "string"}}, "required": ["phone_number", "message"]
+        self.tools.register("send_whatsapp", self._tool_send_whatsapp, "Send a WhatsApp message to a contact name or phone number. Automatically refines and polishes the user's spoken words into polite, well-articulated Bengali before sending.", {
+            "type": "object",
+            "properties": {
+                "recipient": {"type": "string", "description": "Contact person name (e.g. 'Rahim') or direct phone number."},
+                "message": {"type": "string", "description": "The raw message text or instruction spoken by the user."},
+                "polish_message": {"type": "boolean", "description": "Whether to use AI to polish the message into elegant, polite language (default: true)."}
+            },
+            "required": ["recipient", "message"]
+        })
+        self.tools.register("send_whatsapp_pdf", self._tool_send_whatsapp_pdf, "Send a PDF document (such as the latest meeting report) to a contact or phone number via WhatsApp.", {
+            "type": "object",
+            "properties": {
+                "recipient": {"type": "string", "description": "Contact name or phone number to send the PDF to."},
+                "document_path": {"type": "string", "description": "Optional file path of the PDF. If omitted, sends the latest meeting report PDF."}
+            },
+            "required": ["recipient"]
         })
         self.tools.register("memorize_fact", self._tool_memorize_fact, "Save a specific fact or detail about a person or event to long-term memory. Do this autonomously whenever you learn something important (e.g. user's hobbies, current tasks, preferences).", {
             "type": "object", "properties": {"fact": {"type": "string", "description": "The fact to remember (e.g. 'Palash likes black coffee')."}, "person_name": {"type": "string", "description": "Optional name of the person this fact is about."}}, "required": ["fact"]
@@ -930,9 +963,104 @@ class LumiBrain:
         logger.info(f"Mock sending Email to {to_address} with subject '{subject}': {message}")
         return f"Email successfully queued to {to_address}."
 
-    def _tool_send_whatsapp(self, phone_number: str, message: str) -> str:
-        logger.info(f"Mock sending WhatsApp to {phone_number}: {message}")
-        return f"WhatsApp message successfully queued to {phone_number}."
+    def _tool_play_music(self, song_name: str) -> str:
+        """Search and play a requested song or music track."""
+        if not hasattr(self, "music_player"):
+            return "মিউজিক প্লেয়ার সাবসিস্টেম প্রস্তুত নয়।"
+
+        # Indicate excited / listening on eyes
+        self.eyes.set_expression("excited")
+        logger.info(f"Requested music: '{song_name}'")
+        success, msg = self.music_player.play(song_name)
+        if success:
+            self.eyes.set_expression("happy")
+            return msg
+        else:
+            self.eyes.set_expression("sad")
+            return msg
+
+    def _tool_stop_music(self) -> str:
+        """Stop music playback."""
+        if not hasattr(self, "music_player"):
+            return "মিউজিক প্লেয়ার প্রস্তুত নয়।"
+
+        self.music_player.stop()
+        self.eyes.set_expression("neutral")
+        return "গান বাজানো বন্ধ করা হয়েছে।"
+
+    def _tool_send_whatsapp(self, recipient: str, message: str, polish_message: bool = True) -> str:
+        """Send a WhatsApp message with AI refinement and contact resolution."""
+        if not hasattr(self, "whatsapp"):
+            return "হোয়াটসঅ্যাপ সাবসিস্টেম প্রস্তুত নয়।"
+
+        phone = recipient.strip()
+        recipient_name = recipient.strip()
+        relationship = ""
+
+        # 1. Resolve contact name to phone number if known person
+        person = self.memory.find_person_by_name(recipient_name)
+        if person:
+            recipient_name = person.name
+            relationship = getattr(person, "relationship", "")
+            if isinstance(person.metadata, dict) and person.metadata.get("phone"):
+                phone = person.metadata["phone"]
+            else:
+                return (
+                    f"'{person.name}' আমার মেমোরিতে আছেন, কিন্তু উনার কোনো ফোন নম্বর সেভ করা নেই। "
+                    f"অনুগ্রহ করে নম্বরটি বলুন, আমি সেভ করে মেসেজ পাঠাচ্ছি।"
+                )
+
+        # 2. Polish and enhance message with AI if requested
+        final_message = message.strip()
+        if polish_message and hasattr(self, "refine_message"):
+            try:
+                final_message = self.refine_message(
+                    raw_text=message,
+                    recipient_name=recipient_name,
+                    relationship=relationship,
+                )
+            except Exception as e:
+                logger.debug(f"Message polish error: {e}")
+
+        # 3. Dispatch message
+        success, status_msg = self.whatsapp.send_text(phone=phone, message=final_message)
+        if success:
+            return f"হোয়াটসঅ্যাপে {recipient_name}-কে পরিমার্জিত বার্তাটি পাঠানো হয়েছে:\n\"{final_message}\""
+        return f"হোয়াটসঅ্যাপে বার্তা পাঠাতে ব্যর্থ হয়েছে: {status_msg}"
+
+    def _tool_send_whatsapp_pdf(self, recipient: str, document_path: Optional[str] = None) -> str:
+        """Send a PDF report to a recipient via WhatsApp."""
+        if not hasattr(self, "whatsapp"):
+            return "হোয়াটসঅ্যাপ সাবসিস্টেম প্রস্তুত নয়।"
+
+        phone = recipient.strip()
+        recipient_name = recipient.strip()
+
+        person = self.memory.find_person_by_name(recipient_name)
+        if person:
+            recipient_name = person.name
+            if isinstance(person.metadata, dict) and person.metadata.get("phone"):
+                phone = person.metadata["phone"]
+            else:
+                return f"'{person.name}' এর কোনো ফোন নম্বর সেভ করা নেই।"
+
+        # If no document_path provided, generate/retrieve the latest meeting report PDF
+        pdf_file = document_path
+        if not pdf_file or not os.path.exists(pdf_file):
+            if hasattr(self, "meeting_manager"):
+                pdf_file = self.meeting_manager.generate_pdf_report()
+
+        if not pdf_file or not os.path.exists(pdf_file):
+            return "পাঠানোর মতো কোনো PDF রিপোর্ট খুঁজে পাওয়া যায়নি।"
+
+        success, status_msg = self.whatsapp.send_document(
+            phone=phone,
+            file_path=pdf_file,
+            caption=f"LUMI Meeting Report for {recipient_name}",
+        )
+        if success:
+            return f"সফলভাবে {recipient_name}-এর হোয়াটসঅ্যাপে PDF রিপোর্টটি পাঠানো হয়েছে: {os.path.basename(pdf_file)}"
+        return f"হোয়াটসঅ্যাপে PDF পাঠাতে ব্যর্থ হয়েছে: {status_msg}"
 
 
 
