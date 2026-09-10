@@ -58,13 +58,17 @@ class ServoController:
     def _load_calibrations(self, hw_config: Optional[HardwareConfig]) -> None:
         raw_channels = hw_config.channels if hw_config else {}
         defaults = {
-            "head_pan": {"channel": 0, "min_angle": -80.0, "max_angle": 80.0, "home_angle": 0.0},
-            "head_tilt": {"channel": 1, "min_angle": -30.0, "max_angle": 45.0, "home_angle": 0.0},
-            "left_arm": {"channel": 2, "min_angle": -45.0, "max_angle": 90.0, "home_angle": 0.0},
-            "right_arm": {"channel": 3, "min_angle": -45.0, "max_angle": 90.0, "home_angle": 0.0, "inverted": True},
+            "head_tilt": {"channel": 0, "min_angle": -15.0, "max_angle": 15.0, "home_angle": 0.0},
+            "right_arm_y": {"channel": 1, "min_angle": -60.0, "max_angle": 25.0, "home_angle": 0.0},
+            "left_arm_y": {"channel": 2, "min_angle": -25.0, "max_angle": 60.0, "home_angle": 0.0},
+            "right_arm_x": {"channel": 3, "min_angle": -25.0, "max_angle": 5.0, "home_angle": 0.0},
+            "left_arm_x": {"channel": 4, "min_angle": -5.0, "max_angle": 25.0, "home_angle": 0.0},
+            "head_pan": {"channel": 5, "min_angle": -90.0, "max_angle": 90.0, "home_angle": 0.0},
         }
 
-        for name, def_vals in defaults.items():
+        all_names = set(defaults.keys()) | set(raw_channels.keys())
+        for name in all_names:
+            def_vals = defaults.get(name, {"channel": 0, "min_angle": -90.0, "max_angle": 90.0, "home_angle": 0.0})
             cfg = raw_channels.get(name, def_vals)
             cal = ChannelCalibration(
                 channel=int(cfg.get("channel", def_vals.get("channel", 0))),
@@ -79,6 +83,34 @@ class ServoController:
             self.current_angles[name] = cal.home_angle
             self.target_angles[name] = cal.home_angle
 
+        # Aliases for convenience, backward compatibility, and direct channel addressing
+        alias_map = {
+            "right_arm": "right_arm_x",
+            "left_arm": "left_arm_x",
+            "right_arm_pitch": "right_arm_y",
+            "left_arm_pitch": "left_arm_y",
+            "body": "head_pan",
+            "waist": "head_pan",
+            "body_pan": "head_pan",
+            "0": "head_tilt",
+            "1": "right_arm_y",
+            "2": "left_arm_y",
+            "3": "right_arm_x",
+            "4": "left_arm_x",
+            "5": "head_pan",
+            "channel_0": "head_tilt",
+            "channel_1": "right_arm_y",
+            "channel_2": "left_arm_y",
+            "channel_3": "right_arm_x",
+            "channel_4": "left_arm_x",
+            "channel_5": "head_pan",
+        }
+        for alias, target in alias_map.items():
+            if target in self.channels and alias not in self.channels:
+                self.channels[alias] = self.channels[target]
+                self.current_angles[alias] = self.channels[target].home_angle
+                self.target_angles[alias] = self.channels[target].home_angle
+
     def initialize(self) -> bool:
         """Initialize driver and move all channels to home position."""
         if not self.driver.initialize():
@@ -92,20 +124,29 @@ class ServoController:
 
     def home_all(self, duration_s: float = 0.5) -> None:
         """Move all calibrated channels to their safe home positions."""
-        targets = {name: cal.home_angle for name, cal in self.channels.items()}
+        targets = {}
+        seen_channels = set()
+        for name, cal in self.channels.items():
+            if cal.channel not in seen_channels:
+                seen_channels.add(cal.channel)
+                targets[name] = cal.home_angle
         self.move_multiple(targets, duration_s=duration_s)
 
     def angle_to_pulse_us(self, name: str, angle_deg: float) -> int:
-        """Translate physical angle in degrees to pulse width microseconds."""
+        """Translate physical angle in degrees to pulse width microseconds.
+        
+        Standard PCA9685/servo mapping:
+        -90° to +90° corresponds to min_pulse_us to max_pulse_us (500us - 2500us).
+        0° is center (1500us).
+        Angles are clamped strictly within [cal.min_angle, cal.max_angle].
+        """
         cal = self.channels[name]
         # Clamp to safe limits
         clamped = max(cal.min_angle, min(cal.max_angle, angle_deg))
         if cal.inverted:
             clamped = -clamped
 
-        # Normalize 0.0 - 1.0 across range
-        range_deg = cal.max_angle - cal.min_angle or 1.0
-        norm = (clamped - cal.min_angle) / range_deg
+        norm = (clamped + 90.0) / 180.0
         pulse = cal.min_pulse_us + norm * (cal.max_pulse_us - cal.min_pulse_us)
         return int(pulse)
 
@@ -119,6 +160,13 @@ class ServoController:
             clamped = max(cal.min_angle, min(cal.max_angle, angle_deg))
             self.current_angles[name] = clamped
             self.target_angles[name] = clamped
+
+            # Sync aliases sharing the same physical channel
+            for other_name, other_cal in self.channels.items():
+                if other_cal.channel == cal.channel:
+                    self.current_angles[other_name] = clamped
+                    self.target_angles[other_name] = clamped
+
             pulse = self.angle_to_pulse_us(name, clamped)
             self.driver.set_pwm_us(cal.channel, pulse)
             self._last_move_time = time.time()
@@ -149,17 +197,25 @@ class ServoController:
             t = step / steps
             eased_t = ease_in_out_cubic(t)
             with self._lock:
+                written_channels = set()
                 for k, end_val in valid_targets.items():
                     start_val = start_angles[k]
                     current_interp = start_val + (end_val - start_val) * eased_t
                     self.current_angles[k] = current_interp
-                    pulse = self.angle_to_pulse_us(k, current_interp)
-                    self.driver.set_pwm_us(self.channels[k].channel, pulse)
+                    ch_num = self.channels[k].channel
+                    if ch_num not in written_channels:
+                        written_channels.add(ch_num)
+                        pulse = self.angle_to_pulse_us(k, current_interp)
+                        self.driver.set_pwm_us(ch_num, pulse)
             time.sleep(dt)
 
         with self._lock:
             for k, end_val in valid_targets.items():
                 self.current_angles[k] = end_val
+                ch_num = self.channels[k].channel
+                for other_name, other_cal in self.channels.items():
+                    if other_cal.channel == ch_num:
+                        self.current_angles[other_name] = end_val
             self._last_move_time = time.time()
 
     def relax_all(self) -> None:

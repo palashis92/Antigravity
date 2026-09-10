@@ -43,9 +43,9 @@ class GestureManager:
     # -------------------------------------------------------------------------
 
     def greet(self) -> None:
-        """Friendly greeting: tilts head up slightly, waves right arm, returns home."""
+        """Friendly greeting: tilts head up slightly (-10°), waves right arm, returns home."""
         logger.info("Executing gesture: GREET")
-        self.head.look_at(0.0, 15.0, duration_s=0.3)
+        self.head.look_at(0.0, -10.0, duration_s=0.3)
         self.arms.wave_right(count=2)
         self.head.look_center(duration_s=0.25)
         self.arms.arms_home(duration_s=0.25)
@@ -58,46 +58,46 @@ class GestureManager:
     def happy(self) -> None:
         """Joyful expression: nods head enthusiastically and raises both arms."""
         logger.info("Executing gesture: HAPPY")
-        self.arms.raise_both(60.0, duration_s=0.3)
-        self.head.nod(count=2, amplitude_deg=18.0)
+        self.arms.raise_both(duration_s=0.3)
+        self.head.nod(count=2, amplitude_deg=12.0)
         self.arms.arms_home(duration_s=0.3)
         self.head.look_center(duration_s=0.2)
 
     def thinking(self) -> None:
         """Contemplative gesture: tilts head to side and slightly up."""
         logger.info("Executing gesture: THINKING")
-        self.head.look_at(18.0, 20.0, duration_s=0.5)
-        self.arms.set_left_arm(25.0, duration_s=0.4)
+        self.head.look_at(18.0, -10.0, duration_s=0.5)
+        self.arms.set_left_arm(20.0, duration_s=0.4)
 
     def curious(self) -> None:
         """Inquisitive head tilt."""
         logger.info("Executing gesture: CURIOUS")
-        self.head.look_at(-15.0, 10.0, duration_s=0.4)
+        self.head.look_at(-15.0, -5.0, duration_s=0.4)
         time.sleep(0.3)
-        self.head.look_at(15.0, 10.0, duration_s=0.4)
+        self.head.look_at(15.0, -5.0, duration_s=0.4)
         self.head.look_center(duration_s=0.3)
 
     def excited(self) -> None:
         """Energetic bounce with arms up."""
         logger.info("Executing gesture: EXCITED")
-        self.arms.raise_both(75.0, duration_s=0.25)
+        self.arms.raise_both(duration_s=0.25)
         for _ in range(2):
-            self.head.look_at(0.0, 25.0, duration_s=0.15)
-            self.head.look_at(0.0, -10.0, duration_s=0.15)
+            self.head.look_at(0.0, -15.0, duration_s=0.15)  # Up
+            self.head.look_at(0.0, 10.0, duration_s=0.15)   # Down
         self.head.look_center(duration_s=0.2)
         self.arms.arms_home(duration_s=0.3)
 
     def sleep(self) -> None:
-        """Head drops down, arms rest down."""
+        """Head drops down (+15°), arms rest down."""
         logger.info("Executing gesture: SLEEP")
         self.arms.arms_home(duration_s=0.4)
-        self.head.look_down(25.0, duration_s=0.8)
+        self.head.look_down(15.0, duration_s=0.8)
 
     def bored(self) -> None:
         """Bored gesture: subtle head tilt, slight arm shift, look around."""
         logger.info("Executing gesture: BORED")
-        self.head.look_at(-12.0, 15.0, duration_s=0.6)
-        self.arms.set_left_arm(18.0, duration_s=0.4)
+        self.head.look_at(-12.0, 10.0, duration_s=0.6)
+        self.arms.set_left_arm(15.0, duration_s=0.4)
         time.sleep(0.4)
         self.arms.set_left_arm(0.0, duration_s=0.4)
         self.head.look_at(12.0, 10.0, duration_s=0.6)
@@ -112,20 +112,20 @@ class GestureManager:
 
         if action == "look_around":
             pan = random.choice([-25.0, -15.0, 15.0, 25.0])
-            tilt = random.uniform(-8.0, 12.0)
+            tilt = random.uniform(-10.0, 10.0)
             self.head.look_at(pan, tilt, duration_s=0.6)
             time.sleep(random.uniform(0.4, 0.8))
             self.head.look_center(duration_s=0.5)
 
         elif action == "bored_shrug":
-            self.head.look_at(random.uniform(-10.0, 10.0), -12.0, duration_s=0.4)
-            self.arms.set_both_arms(15.0, 15.0, duration_s=0.35)
+            self.head.look_at(random.uniform(-10.0, 10.0), 10.0, duration_s=0.4)
+            self.arms.set_both_arms(15.0, -15.0, duration_s=0.35)
             time.sleep(0.3)
             self.arms.arms_home(duration_s=0.4)
             self.head.look_center(duration_s=0.4)
 
         elif action == "head_glance":
-            self.head.look_at(random.uniform(-20.0, 20.0), random.uniform(5.0, 18.0), duration_s=0.5)
+            self.head.look_at(random.uniform(-20.0, 20.0), random.uniform(-10.0, 10.0), duration_s=0.5)
             time.sleep(0.3)
             self.head.look_center(duration_s=0.4)
 
@@ -136,7 +136,7 @@ class GestureManager:
                 time.sleep(0.3)
                 self.arms.set_left_arm(0.0, duration_s=0.4)
             else:
-                self.arms.set_right_arm(20.0, duration_s=0.4)
+                self.arms.set_right_arm(-20.0, duration_s=0.4)
                 time.sleep(0.3)
                 self.arms.set_right_arm(0.0, duration_s=0.4)
 

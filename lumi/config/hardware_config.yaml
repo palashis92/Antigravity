@@ -1,5 +1,11 @@
 # LUMI Hardware Mapping & Calibration Configuration
-# Note: Pending final CAD model and driver board confirmation.
+# Calibrated & Tested on Real Hardware:
+# Channel 0: Head (up/down tilt): -15° = up, +15° = down
+# Channel 1: Right hand, Y-axis (front/back): +25° = back, -60° = front
+# Channel 2: Left hand, Y-axis (front/back): -25° = back, +60° = front
+# Channel 3: Right hand, X-axis (up/down): -25° = up, +5° = down
+# Channel 4: Left hand, X-axis (up/down): +25° = up, -5° = down
+# Channel 5: Body (waist rotation): -90° = right, +90° = left
 
 servo_driver:
   model: "PCA9685"          # Configurable driver model
@@ -8,41 +14,59 @@ servo_driver:
   pwm_frequency_hz: 50
 
 channels:
-  head_pan:
-    channel: 0
-    min_angle: -80
-    max_angle: 80
-    home_angle: 0
-    min_pulse_us: 500
-    max_pulse_us: 2500
-    inverted: false
-
   head_tilt:
+    channel: 0
+    min_angle: -15
+    max_angle: 15
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: false
+
+  right_arm_y:
     channel: 1
-    min_angle: -30
-    max_angle: 45
+    min_angle: -60
+    max_angle: 25
     home_angle: 0
     min_pulse_us: 500
     max_pulse_us: 2500
     inverted: false
 
-  left_arm_pitch:
+  left_arm_y:
     channel: 2
-    min_angle: -45
-    max_angle: 90
+    min_angle: -25
+    max_angle: 60
     home_angle: 0
     min_pulse_us: 500
     max_pulse_us: 2500
     inverted: false
 
-  right_arm_pitch:
+  right_arm_x:
     channel: 3
-    min_angle: -45
+    min_angle: -25
+    max_angle: 5
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: false
+
+  left_arm_x:
+    channel: 4
+    min_angle: -5
+    max_angle: 25
+    home_angle: 0
+    min_pulse_us: 500
+    max_pulse_us: 2500
+    inverted: false
+
+  head_pan:
+    channel: 5
+    min_angle: -90
     max_angle: 90
     home_angle: 0
     min_pulse_us: 500
     max_pulse_us: 2500
-    inverted: true
+    inverted: false
 
 displays:
   left_eye:
