@@ -2,9 +2,9 @@
 # Calibrated & Tested on Real Hardware:
 # Channel 0: Head (up/down tilt): -15° = up, +15° = down
 # Channel 1: Right hand, Y-axis (front/back): +25° = back, -60° = front
-# Channel 2: Left hand, Y-axis (front/back): -25° = back, +60° = front
+# Channel 2: Left hand, Y-axis (front/back): +25° = back, -60° = front
 # Channel 3: Right hand, X-axis (up/down): -25° = up, +5° = down
-# Channel 4: Left hand, X-axis (up/down): +25° = up, -5° = down
+# Channel 4: Left hand, X-axis (up/down): -25° = up, +5° = down
 # Channel 5: Body (waist rotation): -90° = right, +90° = left
 
 servo_driver:
@@ -34,8 +34,8 @@ channels:
 
   left_arm_y:
     channel: 2
-    min_angle: -25
-    max_angle: 60
+    min_angle: -60
+    max_angle: 25
     home_angle: 0
     min_pulse_us: 500
     max_pulse_us: 2500
@@ -52,8 +52,8 @@ channels:
 
   left_arm_x:
     channel: 4
-    min_angle: -5
-    max_angle: 25
+    min_angle: -25
+    max_angle: 5
     home_angle: 0
     min_pulse_us: 500
     max_pulse_us: 2500

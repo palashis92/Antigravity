@@ -2,9 +2,9 @@
 
 Channel Mapping:
 - Channel 1: Right hand, Y-axis (front/back): +25° = back, -60° = front
-- Channel 2: Left hand, Y-axis (front/back): -25° = back, +60° = front
+- Channel 2: Left hand, Y-axis (front/back): +25° = back, -60° = front
 - Channel 3: Right hand, X-axis (up/down): -25° = up, +5° = down
-- Channel 4: Left hand, X-axis (up/down): +25° = up, -5° = down
+- Channel 4: Left hand, X-axis (up/down): -25° = up, +5° = down
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ class ArmController:
         return self.current_right_x
 
     def set_left_arm(self, angle_deg: float, duration_s: float = 0.35) -> None:
-        """Set Left arm X-axis elevation (+25° = up, -5° = down)."""
+        """Set Left arm X-axis elevation (-25° = up, +5° = down)."""
         self.current_left_x = angle_deg
         self.controller.move_joint("left_arm_x", angle_deg, duration_s=duration_s)
 
@@ -44,7 +44,7 @@ class ArmController:
         self.controller.move_joint("right_arm_x", angle_deg, duration_s=duration_s)
 
     def set_left_arm_y(self, angle_deg: float, duration_s: float = 0.35) -> None:
-        """Set Left arm Y-axis reach (+60° = front, -25° = back)."""
+        """Set Left arm Y-axis reach (-60° = front, +25° = back)."""
         self.current_left_y = angle_deg
         self.controller.move_joint("left_arm_y", angle_deg, duration_s=duration_s)
 
@@ -79,14 +79,14 @@ class ArmController:
         )
 
     def raise_both(self, duration_s: float = 0.4) -> None:
-        """Raise both arms up enthusiastically (Left X: +25°, Right X: -25°)."""
-        self.current_left_x = 25.0
+        """Raise both arms up enthusiastically (Left X: -25°, Right X: -25°)."""
+        self.current_left_x = -25.0
         self.current_right_x = -25.0
         self.controller.move_multiple(
             {
-                "left_arm_x": 25.0,
+                "left_arm_x": -25.0,
                 "right_arm_x": -25.0,
-                "left_arm_y": 20.0,
+                "left_arm_y": -20.0,
                 "right_arm_y": -20.0,
             },
             duration_s=duration_s,
@@ -107,9 +107,9 @@ class ArmController:
         """Perform a friendly left-hand wave gesture."""
         for _ in range(count):
             self.controller.move_multiple(
-                {"left_arm_x": 25.0, "left_arm_y": 45.0}, duration_s=0.2
+                {"left_arm_x": -25.0, "left_arm_y": -45.0}, duration_s=0.2
             )
             self.controller.move_multiple(
-                {"left_arm_x": 15.0, "left_arm_y": 10.0}, duration_s=0.2
+                {"left_arm_x": -15.0, "left_arm_y": -10.0}, duration_s=0.2
             )
         self.arms_home(duration_s=0.25)

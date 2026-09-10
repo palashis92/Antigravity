@@ -36,11 +36,11 @@ def test_servo_controller_limits_and_interpolation() -> None:
     ctrl.move_joint("right_arm_y", 50.0, duration_s=0.05)
     assert ctrl.current_angles["right_arm_y"] == 25.0
 
-    # Left hand Y clamp [-25.0, 60.0]
-    ctrl.move_joint("left_arm_y", -50.0, duration_s=0.05)
-    assert ctrl.current_angles["left_arm_y"] == -25.0
-    ctrl.move_joint("left_arm_y", 100.0, duration_s=0.05)
-    assert ctrl.current_angles["left_arm_y"] == 60.0
+    # Left hand Y clamp [-60.0, 25.0]
+    ctrl.move_joint("left_arm_y", -100.0, duration_s=0.05)
+    assert ctrl.current_angles["left_arm_y"] == -60.0
+    ctrl.move_joint("left_arm_y", 50.0, duration_s=0.05)
+    assert ctrl.current_angles["left_arm_y"] == 25.0
 
     # Right hand X clamp [-25.0, 5.0]
     ctrl.move_joint("right_arm_x", -50.0, duration_s=0.05)
@@ -48,11 +48,11 @@ def test_servo_controller_limits_and_interpolation() -> None:
     ctrl.move_joint("right_arm_x", 50.0, duration_s=0.05)
     assert ctrl.current_angles["right_arm_x"] == 5.0
 
-    # Left hand X clamp [-5.0, 25.0]
+    # Left hand X clamp [-25.0, 5.0]
     ctrl.move_joint("left_arm_x", -50.0, duration_s=0.05)
-    assert ctrl.current_angles["left_arm_x"] == -5.0
+    assert ctrl.current_angles["left_arm_x"] == -25.0
     ctrl.move_joint("left_arm_x", 50.0, duration_s=0.05)
-    assert ctrl.current_angles["left_arm_x"] == 25.0
+    assert ctrl.current_angles["left_arm_x"] == 5.0
 
 
 def test_head_and_arms() -> None:
@@ -75,9 +75,9 @@ def test_head_and_arms() -> None:
     head.look_down(15.0, duration_s=0.02)
     assert ctrl.current_angles["head_tilt"] == 15.0
 
-    # Raise both: Left X: +25° (up), Right X: -25° (up)
+    # Raise both: Left X: -25° (up), Right X: -25° (up)
     arms.raise_both(duration_s=0.02)
-    assert ctrl.current_angles["left_arm_x"] == 25.0
+    assert ctrl.current_angles["left_arm_x"] == -25.0
     assert ctrl.current_angles["right_arm_x"] == -25.0
 
 
@@ -113,20 +113,20 @@ def test_ground_truth_channel_mappings_and_clamps() -> None:
     assert ctrl.channels["right_arm_y"].min_angle == -60.0
     assert ctrl.channels["right_arm_y"].max_angle == 25.0
 
-    # Channel 2: Left hand Y [-25°, +60°]
+    # Channel 2: Left hand Y [-60°, +25°]
     assert ctrl.channels["left_arm_y"].channel == 2
-    assert ctrl.channels["left_arm_y"].min_angle == -25.0
-    assert ctrl.channels["left_arm_y"].max_angle == 60.0
+    assert ctrl.channels["left_arm_y"].min_angle == -60.0
+    assert ctrl.channels["left_arm_y"].max_angle == 25.0
 
     # Channel 3: Right hand X [-25°, +5°]
     assert ctrl.channels["right_arm_x"].channel == 3
     assert ctrl.channels["right_arm_x"].min_angle == -25.0
     assert ctrl.channels["right_arm_x"].max_angle == 5.0
 
-    # Channel 4: Left hand X [-5°, +25°]
+    # Channel 4: Left hand X [-25°, +5°]
     assert ctrl.channels["left_arm_x"].channel == 4
-    assert ctrl.channels["left_arm_x"].min_angle == -5.0
-    assert ctrl.channels["left_arm_x"].max_angle == 25.0
+    assert ctrl.channels["left_arm_x"].min_angle == -25.0
+    assert ctrl.channels["left_arm_x"].max_angle == 5.0
 
     # Channel 5: Body waist rotation [-90°, +90°]
     assert ctrl.channels["head_pan"].channel == 5

@@ -60,9 +60,9 @@ class ServoController:
         defaults = {
             "head_tilt": {"channel": 0, "min_angle": -15.0, "max_angle": 15.0, "home_angle": 0.0},
             "right_arm_y": {"channel": 1, "min_angle": -60.0, "max_angle": 25.0, "home_angle": 0.0},
-            "left_arm_y": {"channel": 2, "min_angle": -25.0, "max_angle": 60.0, "home_angle": 0.0},
+            "left_arm_y": {"channel": 2, "min_angle": -60.0, "max_angle": 25.0, "home_angle": 0.0},
             "right_arm_x": {"channel": 3, "min_angle": -25.0, "max_angle": 5.0, "home_angle": 0.0},
-            "left_arm_x": {"channel": 4, "min_angle": -5.0, "max_angle": 25.0, "home_angle": 0.0},
+            "left_arm_x": {"channel": 4, "min_angle": -25.0, "max_angle": 5.0, "home_angle": 0.0},
             "head_pan": {"channel": 5, "min_angle": -90.0, "max_angle": 90.0, "home_angle": 0.0},
         }
 
