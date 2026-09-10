@@ -67,7 +67,7 @@ class GestureManager:
         """Contemplative gesture: tilts head to side and slightly up."""
         logger.info("Executing gesture: THINKING")
         self.head.look_at(18.0, -10.0, duration_s=0.5)
-        self.arms.set_left_arm(-20.0, duration_s=0.4)
+        self.arms.set_left_arm(20.0, duration_s=0.4)
 
     def curious(self) -> None:
         """Inquisitive head tilt."""
@@ -97,7 +97,7 @@ class GestureManager:
         """Bored gesture: subtle head tilt, slight arm shift, look around."""
         logger.info("Executing gesture: BORED")
         self.head.look_at(-12.0, 10.0, duration_s=0.6)
-        self.arms.set_left_arm(-15.0, duration_s=0.4)
+        self.arms.set_left_arm(15.0, duration_s=0.4)
         time.sleep(0.4)
         self.arms.set_left_arm(0.0, duration_s=0.4)
         self.head.look_at(12.0, 10.0, duration_s=0.6)
@@ -119,7 +119,7 @@ class GestureManager:
 
         elif action == "bored_shrug":
             self.head.look_at(random.uniform(-10.0, 10.0), 10.0, duration_s=0.4)
-            self.arms.set_both_arms(-15.0, -15.0, duration_s=0.35)
+            self.arms.set_both_arms(15.0, -15.0, duration_s=0.35)
             time.sleep(0.3)
             self.arms.arms_home(duration_s=0.4)
             self.head.look_center(duration_s=0.4)
@@ -132,7 +132,7 @@ class GestureManager:
         elif action == "arm_stretch":
             arm = random.choice(["left", "right"])
             if arm == "left":
-                self.arms.set_left_arm(-20.0, duration_s=0.4)
+                self.arms.set_left_arm(20.0, duration_s=0.4)
                 time.sleep(0.3)
                 self.arms.set_left_arm(0.0, duration_s=0.4)
             else:
