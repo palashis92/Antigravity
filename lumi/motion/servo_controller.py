@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..config.settings import HardwareConfig
@@ -52,6 +54,7 @@ class ServoController:
         self._lock = threading.RLock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._state_file = Path("data/servo_state.json")
 
         self._load_calibrations(hw_config)
 
@@ -111,13 +114,77 @@ class ServoController:
                 self.current_angles[alias] = self.channels[target].home_angle
                 self.target_angles[alias] = self.channels[target].home_angle
 
+    def _save_state_to_disk(self) -> None:
+        """Persist current servo angles to disk for recovery across power cuts or reboots."""
+        try:
+            self._state_file.parent.mkdir(parents=True, exist_ok=True)
+            # Filter only canonical channel names to keep file clean
+            canonical = {
+                k: round(v, 2)
+                for k, v in self.current_angles.items()
+                if not k.isdigit() and not k.startswith("channel_")
+            }
+            temp_file = self._state_file.with_suffix(".tmp")
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(canonical, f, indent=2)
+            temp_file.replace(self._state_file)
+        except Exception as e:
+            logger.debug(f"Could not persist servo state to disk: {e}")
+
+    def _load_state_from_disk(self) -> Dict[str, float]:
+        """Load last recorded servo angles before previous shutdown/power cut."""
+        if not self._state_file.exists():
+            return {}
+        try:
+            with open(self._state_file, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {k: float(v) for k, v in data.items()}
+        except Exception as e:
+            logger.warning(f"Failed to read saved servo state from disk: {e}")
+        return {}
+
+    def startup_self_check_and_home(self, duration_s: float = 0.8) -> None:
+        """Perform startup self-check and graceful homing calibration.
+        
+        If power was interrupted during a prior movement, this gently restores
+        all servos from their frozen angles back to 0.0° (Home), avoiding violent
+        motor jerks and power supply inrush current spikes.
+        """
+        saved_angles = self._load_state_from_disk()
+        has_offsets = False
+        if saved_angles:
+            with self._lock:
+                for k, v in saved_angles.items():
+                    if k in self.channels:
+                        cal = self.channels[k]
+                        clamped = max(cal.min_angle, min(cal.max_angle, v))
+                        self.current_angles[k] = clamped
+                        if abs(clamped - cal.home_angle) > 1.0:
+                            has_offsets = True
+
+        if has_offsets:
+            logger.info("⚡ Post-power-cut / reboot self-check: Non-zero servo positions detected. Gently homing all joints...")
+            self.home_all(duration_s=duration_s)
+        else:
+            # Gentle sequential soft-start homing (Head -> Arms -> Body)
+            logger.info("🔄 ServoController startup self-check: Sequential soft-start homing...")
+            self.move_multiple({"head_tilt": 0.0, "head_pan": 0.0}, duration_s=0.25)
+            self.move_multiple({
+                "right_arm_x": 0.0, "right_arm_y": 0.0,
+                "left_arm_x": 0.0, "left_arm_y": 0.0,
+            }, duration_s=0.3)
+
+        self._save_state_to_disk()
+        logger.info("✅ Servo startup self-check complete: All joints aligned to 0.0° (Home).")
+
     def initialize(self) -> bool:
-        """Initialize driver and move all channels to home position."""
+        """Initialize driver and execute startup self-check and homing calibration."""
         if not self.driver.initialize():
             logger.error("Failed to initialize underlying servo driver.")
             return False
 
-        self.home_all()
+        self.startup_self_check_and_home()
         self._running = True
         logger.info("ServoController online with calibrated channels: " + ", ".join(self.channels.keys()))
         return True
@@ -173,6 +240,7 @@ class ServoController:
             except OSError as e:
                 logger.warning(f"I2C error setting servo {name} (ch{cal.channel}): {e}")
             self._last_move_time = time.time()
+        self._save_state_to_disk()
 
     def move_joint(self, name: str, target_angle_deg: float, duration_s: float = 0.25) -> None:
         """Move a single joint smoothly to target angle over duration."""
@@ -223,6 +291,7 @@ class ServoController:
                     if other_cal.channel == ch_num:
                         self.current_angles[other_name] = end_val
             self._last_move_time = time.time()
+        self._save_state_to_disk()
 
     def relax_all(self) -> None:
         """De-energize all servo channels to prevent humming and heating."""

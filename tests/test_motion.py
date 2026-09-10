@@ -186,3 +186,39 @@ def test_enhanced_arms_and_gestures() -> None:
     assert ctrl.current_angles["head_pan"] == 0.0
     gestures.dance()
     assert ctrl.current_angles["head_pan"] == 0.0
+
+
+def test_multi_joint_simultaneous_and_power_cut_recovery() -> None:
+    """Verify simultaneous 6-joint interpolation and power-cut state recovery on reboot."""
+    driver = MockServoDriver()
+    ctrl = ServoController(driver)
+    ctrl.initialize()
+
+    # 1. Test simultaneous 6-joint coordinated parallel movement
+    targets = {
+        "head_pan": 30.0,
+        "head_tilt": -10.0,
+        "right_arm_x": -20.0,
+        "right_arm_y": -30.0,
+        "left_arm_x": 20.0,
+        "left_arm_y": 30.0,
+    }
+    ctrl.move_multiple(targets, duration_s=0.03)
+
+    for k, v in targets.items():
+        assert ctrl.current_angles[k] == v
+
+    # 2. Simulate sudden power cut mid-position
+    # The state file on disk should record these exact non-zero angles
+    saved = ctrl._load_state_from_disk()
+    assert saved.get("head_pan") == 30.0
+    assert saved.get("right_arm_x") == -20.0
+
+    # 3. Simulate robot rebooting with servos frozen at those positions
+    new_driver = MockServoDriver()
+    new_ctrl = ServoController(new_driver)
+    # On initialize, startup_self_check_and_home should detect offsets and gracefully return to 0.0 (Home)
+    new_ctrl.initialize()
+
+    for channel_name in ["head_pan", "head_tilt", "right_arm_x", "right_arm_y", "left_arm_x", "left_arm_y"]:
+        assert new_ctrl.current_angles[channel_name] == 0.0

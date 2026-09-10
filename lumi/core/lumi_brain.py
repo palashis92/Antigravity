@@ -123,8 +123,8 @@ class LumiBrain:
             "properties": {
                 "part": {
                     "type": "string",
-                    "enum": ["head", "right_arm", "left_arm", "both_arms", "body", "waist"],
-                    "description": "Which physical body part to move."
+                    "enum": ["head", "right_arm", "left_arm", "both_arms", "body", "waist", "all"],
+                    "description": "Which physical body part to move (or 'all' for simultaneous full-body motions)."
                 },
                 "action": {
                     "type": "string",
@@ -1104,6 +1104,26 @@ class LumiBrain:
                     elif action == "point":
                         self.arms.point_left()
                         return "বাম হাত দিয়ে সামনের দিকে নির্দেশ করা হয়েছে।"
+
+            # 4. Simultaneous Multi-Part Movements (Combined Arms + Head / All)
+            elif part in ("all", "both_arms_and_head", "head_and_arms"):
+                if action in ("raise", "up"):
+                    # Simultaneously raise both arms and tilt head up
+                    self.servo.move_multiple({
+                        "left_arm_x": 25.0,
+                        "right_arm_x": -25.0,
+                        "left_arm_y": 20.0,
+                        "right_arm_y": -20.0,
+                        "head_tilt": -12.0,
+                    }, duration_s=0.28)
+                    return "একসাথে দুই হাত তোলা হয়েছে এবং মাথা উপরে তাকানো হয়েছে।"
+                elif action in ("lower", "down", "home", "center"):
+                    self.servo.move_multiple({
+                        "left_arm_x": 0.0, "left_arm_y": 0.0,
+                        "right_arm_x": 0.0, "right_arm_y": 0.0,
+                        "head_tilt": 0.0, "head_pan": 0.0,
+                    }, duration_s=0.3)
+                    return "সব অঙ্গপ্রত্যঙ্গ একসাথে সেন্টারে আনা হয়েছে।"
 
             return f"অ্যাকশন '{action}' (অঙ্গ '{part}') সম্পন্ন করতে পারিনি।"
         except Exception as e:

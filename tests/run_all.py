@@ -73,6 +73,7 @@ def main():
         ("test_gestures_execution", tmot.test_gestures_execution, ()),
         ("test_ground_truth_channel_mappings_and_clamps", tmot.test_ground_truth_channel_mappings_and_clamps, ()),
         ("test_enhanced_arms_and_gestures", tmot.test_enhanced_arms_and_gestures, ()),
+        ("test_multi_joint_simultaneous_and_power_cut_recovery", tmot.test_multi_joint_simultaneous_and_power_cut_recovery, ()),
         # Procedural Eye Displays
         ("test_expression_configs", te.test_expression_configs, ()),
         ("test_eye_renderer_lifecycle", te.test_eye_renderer_lifecycle, ()),
