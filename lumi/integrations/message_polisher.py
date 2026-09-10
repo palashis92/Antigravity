@@ -37,6 +37,10 @@ def refine_whatsapp_message(
     if len(clean_text) < 4:
         return clean_text
 
+    # Truncate excessively long text to avoid LLM token exhaustion
+    if len(clean_text) > 2000:
+        clean_text = clean_text[:2000]
+
     system_instruction = (
         "You are LUMI's expert interpersonal communication assistant. "
         "The user wants to send a WhatsApp message to someone. The user dictated "

@@ -59,7 +59,8 @@ class MusicPlayer:
         # Check local cache first
         cached_file = self._find_cached_song(clean_query)
         if cached_file:
-            track_title = Path(cached_file).stem
+            # Use the original query as title, not the sanitized filename
+            track_title = clean_query
             logger.info(f"Playing cached music track: {cached_file}")
             return self._start_playback(cached_file, track_title)
 

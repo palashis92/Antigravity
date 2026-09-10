@@ -168,7 +168,10 @@ class ServoController:
                     self.target_angles[other_name] = clamped
 
             pulse = self.angle_to_pulse_us(name, clamped)
-            self.driver.set_pwm_us(cal.channel, pulse)
+            try:
+                self.driver.set_pwm_us(cal.channel, pulse)
+            except OSError as e:
+                logger.warning(f"I2C error setting servo {name} (ch{cal.channel}): {e}")
             self._last_move_time = time.time()
 
     def move_joint(self, name: str, target_angle_deg: float, duration_s: float = 0.4) -> None:
@@ -206,7 +209,10 @@ class ServoController:
                     if ch_num not in written_channels:
                         written_channels.add(ch_num)
                         pulse = self.angle_to_pulse_us(k, current_interp)
-                        self.driver.set_pwm_us(ch_num, pulse)
+                        try:
+                            self.driver.set_pwm_us(ch_num, pulse)
+                        except OSError as e:
+                            logger.warning(f"I2C error during interpolation (ch{ch_num}): {e}")
             time.sleep(dt)
 
         with self._lock:
@@ -222,7 +228,10 @@ class ServoController:
         """De-energize all servo channels to prevent humming and heating."""
         with self._lock:
             for name, cal in self.channels.items():
-                self.driver.release_channel(cal.channel)
+                try:
+                    self.driver.release_channel(cal.channel)
+                except OSError as e:
+                    logger.warning(f"I2C error relaxing servo {name} (ch{cal.channel}): {e}")
             logger.debug("All servo channels relaxed.")
 
     def shutdown(self) -> None:

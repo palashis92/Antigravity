@@ -101,6 +101,10 @@ class ProactiveRecallEngine:
         if now - self._last_injection_time < self.INJECTION_COOLDOWN:
             return
 
+        # Lock out further requests immediately to prevent race condition
+        # where rapid events bypass the cooldown and spawn concurrent workers
+        self._last_injection_time = now
+
         # Run in background to avoid blocking the event bus
         thread = threading.Thread(
             target=self._process_utterance,
@@ -153,9 +157,13 @@ class ProactiveRecallEngine:
                         person_id="default", query=combined_query
                     )
                     if cloud_str:
-                        # Create a pseudo-fact for cloud results
+                        # Create a pseudo-fact for cloud results with a
+                        # deterministic ID based on content hash for proper dedup
+                        import hashlib
+                        content_id = hashlib.sha256(cloud_str.encode()).hexdigest()[:16]
                         from ..memory.models import Fact
                         cloud_fact = Fact(
+                            id=f"cloud_{content_id}",
                             fact_text=cloud_str,
                             category="cloud_recall",
                         )

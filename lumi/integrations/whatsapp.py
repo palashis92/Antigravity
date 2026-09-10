@@ -15,6 +15,7 @@ import os
 import re
 import urllib.parse
 import urllib.request
+import urllib.error
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -155,6 +156,10 @@ class WhatsAppClient:
                     if res.status in (200, 201):
                         return True, f"+{phone} নাম্বারে মেসেজ সফলভাবে পাঠানো হয়েছে।"
                 return False, f"মেটা এপিআই ত্রুটি।"
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8", errors="ignore") if hasattr(e, "read") else str(e)
+            logger.error(f"Meta WhatsApp HTTP error ({e.code}): {err_body}")
+            return False, f"মেটা এপিআই ত্রুটি ({e.code}): {err_body}"
         except Exception as e:
             logger.error(f"Meta WhatsApp request failed: {e}")
             return False, f"মেসেজ পাঠাতে সমস্যা হয়েছে: {e}"
@@ -178,6 +183,8 @@ class WhatsAppClient:
                 return False, f"ডকুমেন্ট আপলোড ব্যর্থ: {upload_res.text}"
 
             media_id = upload_res.json().get("id")
+            if not media_id:
+                return False, "ডকুমেন্ট আপলোড সম্পন্ন হলেও কোনো মিডিয়া আইডি (ID) পাওয়া যায়নি।"
 
             # Send document message using media_id
             msg_url = f"https://graph.facebook.com/v19.0/{self.meta_phone_id}/messages"

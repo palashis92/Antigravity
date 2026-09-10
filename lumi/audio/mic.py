@@ -98,6 +98,7 @@ class SystemMicBackend(MicBackendBase):
 
     def _start_mono_fallback(self) -> None:
         """Fallback to mono capture if stereo fails."""
+        import struct
         import time
         device = "plug:default" if self.alsa_device == "default" else self.alsa_device
         cmd = ["arecord", "-D", device, "-f", "S16_LE", "-r", str(self.sample_rate), "-c", "1", "-t", "raw", "-q"]
@@ -111,7 +112,15 @@ class SystemMicBackend(MicBackendBase):
                     chunk = proc.stdout.read(4096)
                     if chunk:
                         self._enqueue(self._mono_queue, chunk)
-                        self._enqueue(self._queue, chunk)  # Also put in stereo queue (it's just mono)
+                        # Duplicate mono → synthetic stereo (interleave L=R)
+                        # so downstream read_stereo_chunk consumers get correct format
+                        n_samples = len(chunk) // 2
+                        stereo = bytearray(n_samples * 4)
+                        for i in range(n_samples):
+                            sample = chunk[i*2:i*2+2]
+                            stereo[i*4:i*4+2] = sample
+                            stereo[i*4+2:i*4+4] = sample
+                        self._enqueue(self._queue, bytes(stereo))
         except Exception as e:
             logger.error(f"Mono fallback arecord error: {e}")
 
@@ -178,7 +187,11 @@ class SystemMicBackend(MicBackendBase):
                 if self._proc.stdout: self._proc.stdout.close()
                 if self._proc.stderr: self._proc.stderr.close()
                 self._proc.terminate()
-                self._proc.wait(timeout=0.5)
+                try:
+                    self._proc.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    self._proc.kill()
+                    logger.debug("arecord process killed after timeout")
             except Exception:
                 pass
             self._proc = None

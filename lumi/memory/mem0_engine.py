@@ -1,4 +1,4 @@
-﻿"""
+"""
 Lumi Mem0 Engine: Advanced Semantic Memory Extraction.
 
 Works like mem0ai, but natively optimized for Raspberry Pi and Gemini.
@@ -8,8 +8,9 @@ to extract, deduplicate, and manage semantic facts autonomously.
 
 from typing import List, Optional
 import json
-import threading
 import os
+import re
+import threading
 
 from ..core.logger import get_logger
 from .manager import MemoryManager
@@ -108,7 +109,16 @@ class LumiMem0Engine:
                 )
 
                 # 4. Apply Database Actions
-                actions = json.loads(response.text)
+                raw_json = response.text.strip() if (response and response.text) else "[]"
+                if raw_json.startswith("```"):
+                    raw_json = re.sub(r"^```(?:json)?\s*", "", raw_json)
+                    raw_json = re.sub(r"\s*```$", "", raw_json)
+                try:
+                    actions = json.loads(raw_json)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse LLM memory actions: {e}")
+                    return
+
                 added, updated, deleted = 0, 0, 0
 
                 for action in actions:

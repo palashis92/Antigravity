@@ -139,6 +139,8 @@ class AnjumCompanionEngine:
 
         self.last_stimulus_time = time.time()
         clean = text.lower().strip()
+        # Strip punctuation to handle inputs like "এক!" or "2?"
+        clean = re.sub(r'[।!?.,;:\'"()\[\]{}]', '', clean).strip()
 
         # 1. Number Detection (Counting game)
         for word, num in _NUMBER_MAP.items():

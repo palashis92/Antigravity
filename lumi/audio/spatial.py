@@ -143,7 +143,13 @@ class SpatialAudioProcessor:
     @staticmethod
     def _split_stereo(stereo_pcm: bytes) -> Tuple[np.ndarray, np.ndarray]:
         """Split interleaved stereo PCM into separate L/R float arrays."""
-        samples = np.frombuffer(stereo_pcm, dtype=np.int16).astype(np.float32)
+        # Truncate to a multiple of 4 bytes (2 bytes/sample × 2 channels)
+        # to prevent ValueError on short/odd pipe reads from arecord
+        valid_len = (len(stereo_pcm) // 4) * 4
+        if valid_len == 0:
+            empty = np.array([], dtype=np.float32)
+            return empty, empty
+        samples = np.frombuffer(stereo_pcm[:valid_len], dtype=np.int16).astype(np.float32)
         left = samples[0::2]   # Even indices = left channel
         right = samples[1::2]  # Odd indices = right channel
         return left, right

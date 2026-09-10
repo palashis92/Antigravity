@@ -96,7 +96,11 @@ class SpeakerIdentifier:
         with self._lock:
             try:
                 # Convert PCM bytes to float32 numpy array
-                audio_array = np.frombuffer(audio_pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                # Truncate to multiple of 2 bytes to prevent ValueError on odd-length reads
+                valid_len = (len(audio_pcm) // 2) * 2
+                if valid_len == 0:
+                    return None, 0.0
+                audio_array = np.frombuffer(audio_pcm[:valid_len], dtype=np.int16).astype(np.float32) / 32768.0
 
                 if len(audio_array) < int(sample_rate * 1.0):
                     # Less than 1 second, unreliable
@@ -168,7 +172,11 @@ class SpeakerIdentifier:
 
         with self._lock:
             try:
-                audio_array = np.frombuffer(audio_pcm, dtype=np.int16).astype(np.float32) / 32768.0
+                # Truncate to multiple of 2 bytes to prevent ValueError on odd-length reads
+                valid_len = (len(audio_pcm) // 2) * 2
+                if valid_len == 0:
+                    return None
+                audio_array = np.frombuffer(audio_pcm[:valid_len], dtype=np.int16).astype(np.float32) / 32768.0
 
                 if len(audio_array) < int(sample_rate * 1.5):
                     logger.warning("Audio too short for voice enrollment (need >= 1.5s)")

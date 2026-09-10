@@ -313,7 +313,10 @@ class MeetingManager:
             return target.analysis
 
         transcript_text = target.to_transcript_text()
-        participants_str = ", ".join(target.participants) if target.participants else "অনির্দিষ্ট"
+        # Copy participants set to avoid RuntimeError from concurrent add_utterance
+        with self._lock:
+            participants_snapshot = set(target.participants)
+        participants_str = ", ".join(participants_snapshot) if participants_snapshot else "অনির্দিষ্ট"
         duration_min = round(target.duration_sec / 60.0, 1) if target.duration_sec else "চলমান"
 
         system_instruction = (
@@ -417,8 +420,6 @@ class MeetingManager:
         output_dir: str = "data/documents",
     ) -> str:
         """Generate a PDF document of the meeting summary and action items."""
-        from ..documents.pdf_generator import PDFReportGenerator
-
         target = session or self._active_session or self._last_session
         if not target:
             return ""
@@ -427,22 +428,39 @@ class MeetingManager:
         if not target.analysis:
             self.analyze_meeting(target)
 
-        pdf_gen = PDFReportGenerator(output_dir=output_dir)
-        sections = {
-            "Meeting Information": (
-                f"Title: {target.title}\n"
-                f"Date: {target.started_at[:10]}\n"
-                f"Duration: {round(target.duration_sec / 60, 1)} min\n"
-                f"Participants: {', '.join(target.participants)}"
-            ),
-            "Executive Analysis & Minutes": target.analysis or target.summary,
-            "Chronological Transcript Excerpt": target.to_transcript_text()[:1500],
-        }
+        try:
+            from ..documents.pdf_generator import PDFReportGenerator
+        except ImportError as e:
+            logger.error(f"PDF generation unavailable (missing dependency): {e}")
+            return ""
+        except Exception as e:
+            logger.error(f"PDF generator import failed: {e}")
+            return ""
 
-        pdf_path = pdf_gen.generate_summary_pdf(
-            title=f"LUMI Meeting Report: {target.title}",
-            content_sections=sections,
-            author="LUMI AI Companion Robot",
-        )
-        logger.info(f"Meeting report PDF generated: {pdf_path}")
-        return pdf_path
+        # Copy participants under lock to prevent concurrent modification
+        with self._lock:
+            participants_snapshot = set(target.participants)
+
+        try:
+            pdf_gen = PDFReportGenerator(output_dir=output_dir)
+            sections = {
+                "Meeting Information": (
+                    f"Title: {target.title}\n"
+                    f"Date: {target.started_at[:10]}\n"
+                    f"Duration: {round(target.duration_sec / 60, 1)} min\n"
+                    f"Participants: {', '.join(participants_snapshot)}"
+                ),
+                "Executive Analysis & Minutes": target.analysis or target.summary,
+                "Chronological Transcript Excerpt": target.to_transcript_text()[:1500],
+            }
+
+            pdf_path = pdf_gen.generate_summary_pdf(
+                title=f"LUMI Meeting Report: {target.title}",
+                content_sections=sections,
+                author="LUMI AI Companion Robot",
+            )
+            logger.info(f"Meeting report PDF generated: {pdf_path}")
+            return pdf_path
+        except Exception as e:
+            logger.error(f"PDF report generation failed: {e}", exc_info=True)
+            return ""

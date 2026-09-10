@@ -496,7 +496,12 @@ class LumiBrain:
             if not self.speaker_id.is_available():
                 return
 
-            speaker_name, confidence = self.speaker_id.identify_speaker(audio_bytes)
+            try:
+                speaker_name, confidence = self.speaker_id.identify_speaker(audio_bytes)
+            except Exception as e:
+                logger.error(f"Speaker identification error in background thread: {e}")
+                return
+
             if speaker_name and confidence >= 0.75:
                 if speaker_name != self._current_speaker:
                     self._current_speaker = speaker_name
@@ -633,7 +638,10 @@ class LumiBrain:
         """Autonomous visual pipeline: detect person -> track -> greet -> engage."""
         faces = self.face_service.detect_and_recognize(face_frame)
         if not faces:
+            self._last_detected_faces = []
             return
+
+        self._last_detected_faces = faces
 
         faces = self.face_service.confirm_identity(faces)
         
