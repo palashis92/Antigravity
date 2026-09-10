@@ -33,27 +33,27 @@ class ArmController:
     def current_right(self) -> float:
         return self.current_right_x
 
-    def set_left_arm(self, angle_deg: float, duration_s: float = 0.35) -> None:
+    def set_left_arm(self, angle_deg: float, duration_s: float = 0.25) -> None:
         """Set Left arm X-axis elevation (+25° = up, -5° = down)."""
         self.current_left_x = angle_deg
         self.controller.move_joint("left_arm_x", angle_deg, duration_s=duration_s)
 
-    def set_right_arm(self, angle_deg: float, duration_s: float = 0.35) -> None:
+    def set_right_arm(self, angle_deg: float, duration_s: float = 0.25) -> None:
         """Set Right arm X-axis elevation (-25° = up, +5° = down)."""
         self.current_right_x = angle_deg
         self.controller.move_joint("right_arm_x", angle_deg, duration_s=duration_s)
 
-    def set_left_arm_y(self, angle_deg: float, duration_s: float = 0.35) -> None:
+    def set_left_arm_y(self, angle_deg: float, duration_s: float = 0.25) -> None:
         """Set Left arm Y-axis reach (+60° = front, -25° = back)."""
         self.current_left_y = angle_deg
         self.controller.move_joint("left_arm_y", angle_deg, duration_s=duration_s)
 
-    def set_right_arm_y(self, angle_deg: float, duration_s: float = 0.35) -> None:
+    def set_right_arm_y(self, angle_deg: float, duration_s: float = 0.25) -> None:
         """Set Right arm Y-axis reach (-60° = front, +25° = back)."""
         self.current_right_y = angle_deg
         self.controller.move_joint("right_arm_y", angle_deg, duration_s=duration_s)
 
-    def set_both_arms(self, left_deg: float, right_deg: float, duration_s: float = 0.35) -> None:
+    def set_both_arms(self, left_deg: float, right_deg: float, duration_s: float = 0.25) -> None:
         """Set elevation (X-axis) for both arms simultaneously."""
         self.current_left_x = left_deg
         self.current_right_x = right_deg
@@ -62,7 +62,7 @@ class ArmController:
             duration_s=duration_s,
         )
 
-    def arms_home(self, duration_s: float = 0.3) -> None:
+    def arms_home(self, duration_s: float = 0.25) -> None:
         """Lower arms to resting idle position (0°, 0° on all axes)."""
         self.current_left_x = 0.0
         self.current_left_y = 0.0
@@ -78,7 +78,29 @@ class ArmController:
             duration_s=duration_s,
         )
 
-    def raise_both(self, duration_s: float = 0.4) -> None:
+    def lower_both(self, duration_s: float = 0.25) -> None:
+        """Lower both arms down to resting position."""
+        self.arms_home(duration_s=duration_s)
+
+    def raise_right(self, duration_s: float = 0.25) -> None:
+        """Raise right arm up and slightly forward (-25° X, -20° Y)."""
+        self.current_right_x = -25.0
+        self.current_right_y = -20.0
+        self.controller.move_multiple(
+            {"right_arm_x": -25.0, "right_arm_y": -20.0},
+            duration_s=duration_s,
+        )
+
+    def raise_left(self, duration_s: float = 0.25) -> None:
+        """Raise left arm up and slightly forward (+25° X, +20° Y)."""
+        self.current_left_x = 25.0
+        self.current_left_y = 20.0
+        self.controller.move_multiple(
+            {"left_arm_x": 25.0, "left_arm_y": 20.0},
+            duration_s=duration_s,
+        )
+
+    def raise_both(self, duration_s: float = 0.28) -> None:
         """Raise both arms up enthusiastically (Left X: +25°, Right X: -25°)."""
         self.current_left_x = 25.0
         self.current_right_x = -25.0
@@ -89,6 +111,20 @@ class ArmController:
                 "left_arm_y": 20.0,
                 "right_arm_y": -20.0,
             },
+            duration_s=duration_s,
+        )
+
+    def point_right(self, duration_s: float = 0.25) -> None:
+        """Point right arm forward (-50° Y, -15° X)."""
+        self.controller.move_multiple(
+            {"right_arm_x": -15.0, "right_arm_y": -50.0},
+            duration_s=duration_s,
+        )
+
+    def point_left(self, duration_s: float = 0.25) -> None:
+        """Point left arm forward (+50° Y, +15° X)."""
+        self.controller.move_multiple(
+            {"left_arm_x": 15.0, "left_arm_y": 50.0},
             duration_s=duration_s,
         )
 

@@ -87,6 +87,30 @@ class GestureManager:
         self.head.look_center(duration_s=0.2)
         self.arms.arms_home(duration_s=0.3)
 
+    def celebrate(self) -> None:
+        """Triumphant victory celebration: raises both arms and nods excitedly."""
+        logger.info("Executing gesture: CELEBRATE")
+        self.arms.raise_both(duration_s=0.25)
+        self.head.nod(count=3, amplitude_deg=14.0)
+        time.sleep(0.3)
+        self.arms.arms_home(duration_s=0.3)
+        self.head.look_center(duration_s=0.2)
+
+    def dance(self) -> None:
+        """Playful rhythmic dance: sways waist left and right with alternating arm pulses."""
+        logger.info("Executing gesture: DANCE")
+        for _ in range(2):
+            # Sway left with left arm raise
+            self.head.look_at(25.0, -5.0, duration_s=0.22)
+            self.arms.raise_left(duration_s=0.2)
+            time.sleep(0.15)
+            # Sway right with right arm raise
+            self.head.look_at(-25.0, -5.0, duration_s=0.22)
+            self.arms.raise_right(duration_s=0.2)
+            time.sleep(0.15)
+        self.head.look_center(duration_s=0.25)
+        self.arms.arms_home(duration_s=0.25)
+
     def sleep(self) -> None:
         """Head drops down (+15°), arms rest down."""
         logger.info("Executing gesture: SLEEP")

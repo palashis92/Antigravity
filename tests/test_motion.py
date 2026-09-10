@@ -139,3 +139,50 @@ def test_ground_truth_channel_mappings_and_clamps() -> None:
     assert ctrl.angle_to_pulse_us("head_pan", 90.0) == 2500
     assert ctrl.angle_to_pulse_us("head_tilt", -15.0) == 1333
     assert ctrl.angle_to_pulse_us("head_tilt", 15.0) == 1666
+
+
+def test_enhanced_arms_and_gestures() -> None:
+    """Verify newly implemented single arm, celebrate, dance, and fast tracking methods."""
+    driver = MockServoDriver()
+    ctrl = ServoController(driver)
+    ctrl.initialize()
+    head = HeadController(ctrl)
+    arms = ArmController(ctrl)
+    gestures = GestureManager(ctrl, head, arms)
+
+    # Test single arm raises
+    arms.raise_right(duration_s=0.02)
+    assert ctrl.current_angles["right_arm_x"] == -25.0
+    assert ctrl.current_angles["right_arm_y"] == -20.0
+
+    arms.raise_left(duration_s=0.02)
+    assert ctrl.current_angles["left_arm_x"] == 25.0
+    assert ctrl.current_angles["left_arm_y"] == 20.0
+
+    arms.lower_both(duration_s=0.02)
+    assert ctrl.current_angles["right_arm_x"] == 0.0
+    assert ctrl.current_angles["left_arm_x"] == 0.0
+
+    # Test pointing
+    arms.point_right(duration_s=0.02)
+    assert ctrl.current_angles["right_arm_y"] == -50.0
+
+    arms.point_left(duration_s=0.02)
+    assert ctrl.current_angles["left_arm_y"] == 50.0
+
+    # Test active visual tracking
+    # Person on the right (center_x = 550, frame_w = 640) -> head pans right (negative)
+    head.look_center(duration_s=0.01)
+    pan, tilt = head.track_bounding_box(550.0, 240.0, frame_w=640.0, frame_h=480.0)
+    assert pan < 0.0
+
+    # Person on the left (center_x = 100, frame_w = 640) -> head pans left (positive)
+    head.look_center(duration_s=0.01)
+    pan, tilt = head.track_bounding_box(100.0, 240.0, frame_w=640.0, frame_h=480.0)
+    assert pan > 0.0
+
+    # Test celebrate and dance execution
+    gestures.celebrate()
+    assert ctrl.current_angles["head_pan"] == 0.0
+    gestures.dance()
+    assert ctrl.current_angles["head_pan"] == 0.0

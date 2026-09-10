@@ -118,10 +118,43 @@ class LumiBrain:
         self.tools.register("analyze_plant", self._tool_analyze_plant, "Analyze the plant the camera is seeing.")
         self.tools.register("describe_vision", self._tool_describe_vision, "Describe what you currently see through the camera. Use this when someone asks what you see, or when you want to comment on surroundings.")
         self.tools.register("analyze_chess", self._tool_analyze_chess, "Analyze the chessboard the camera is seeing.")
-        self.tools.register("perform_gesture", self._tool_perform_gesture, "Perform a physical gesture. CALL THIS SPARINGLY, only when highly appropriate to the context (e.g., waving when saying goodbye). Do NOT call this continuously.", {
-            "type": "object", "properties": {"gesture_name": {"type": "string", "enum": ["greet", "thinking", "wave", "happy", "sad"]}}, "required": ["gesture_name"]
+        self.tools.register("control_body", self._tool_control_body, "Directly move LUMI's physical body parts (head, right_arm, left_arm, both_arms, or body/waist). ALWAYS call this immediately when the user commands you to move (e.g. 'তোমার হাতটা উপরে তোলো', 'মাথা নিচে নামাও', 'বডিটা ঘোরাও', 'ডানে তাকাও', 'হাত দিয়ে দেখাও'). Also use it naturally during conversation when you want to look at something or emphasize speech.", {
+            "type": "object",
+            "properties": {
+                "part": {
+                    "type": "string",
+                    "enum": ["head", "right_arm", "left_arm", "both_arms", "body", "waist"],
+                    "description": "Which physical body part to move."
+                },
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "raise", "lower", "wave", "point",
+                        "look_up", "look_down", "look_left", "look_right", "look_center",
+                        "turn_left", "turn_right", "center",
+                        "nod", "shake", "tilt"
+                    ],
+                    "description": "The motion action to execute."
+                },
+                "angle_deg": {
+                    "type": "number",
+                    "description": "Optional specific movement angle in degrees (e.g. 15, 30, 45)."
+                }
+            },
+            "required": ["part", "action"]
         })
-        self.tools.register("move_servo", self._tool_move_servo, "Move a specific servo.", {
+        self.tools.register("perform_gesture", self._tool_perform_gesture, "Perform an expressive, human-like full-body gesture with LUMI's arms, head, and waist. Call this when greeting someone, celebrating, dancing, showing curiosity, or expressing emotion.", {
+            "type": "object",
+            "properties": {
+                "gesture_name": {
+                    "type": "string",
+                    "enum": ["greet", "wave", "happy", "celebrate", "thinking", "curious", "excited", "sleep", "bored", "dance"],
+                    "description": "The name of the expressive gesture."
+                }
+            },
+            "required": ["gesture_name"]
+        })
+        self.tools.register("move_servo", self._tool_move_servo, "Move a specific servo directly by raw name and angle.", {
             "type": "object", "properties": {"servo_name": {"type": "string"}, "angle": {"type": "number"}}, "required": ["servo_name", "angle"]
         })
         self.tools.register("update_contact_info", self._tool_update_contact_info, "Save or update a person's name, phone, and address.", {
@@ -369,7 +402,7 @@ class LumiBrain:
                 time.sleep(1.0)
                 continue
             now = time.time()
-            if now - last_frame_time >= 0.3:
+            if now - last_frame_time >= 0.15:
                 last_frame_time = now
                 frame = self.camera.get_frame()
                 if frame is not None:
@@ -398,7 +431,7 @@ class LumiBrain:
                             if hasattr(self.realtime_voice, "inject_context"):
                                 self.realtime_voice.inject_context(f"[PROACTIVE CHILD PROMPT SPOKEN: '{stimulus}']")
 
-            time.sleep(0.1)
+            time.sleep(0.05)
 
     def _compute_rms(self, pcm_data: bytes) -> float:
         import struct
@@ -980,6 +1013,102 @@ class LumiBrain:
         chess_res = self.chess_vision.extract_fen_from_frame(frame)
         eval_res = self.chess_engine.analyze_position(chess_res.fen_string)
         return eval_res.explanation_bn
+
+    def _tool_control_body(self, part: str, action: str, angle_deg: Optional[float] = None) -> str:
+        """Direct, expressive motion execution based on user voice requests."""
+        part = part.lower().strip()
+        action = action.lower().strip()
+        logger.info(f"🦾 control_body called: part='{part}', action='{action}', angle={angle_deg}")
+
+        try:
+            # 1. Head movements
+            if part == "head":
+                if action in ("look_up", "up"):
+                    deg = angle_deg if angle_deg is not None else 15.0
+                    self.head.look_up(deg)
+                    return f"মাথা উপরের দিকে তোলা হয়েছে ({deg}°)।"
+                elif action in ("look_down", "down"):
+                    deg = angle_deg if angle_deg is not None else 15.0
+                    self.head.look_down(deg)
+                    return f"মাথা নিচের দিকে নামানো হয়েছে ({deg}°)।"
+                elif action in ("look_left", "left"):
+                    deg = angle_deg if angle_deg is not None else 35.0
+                    self.head.look_left(deg)
+                    return f"মাথা বামে ঘোরানো হয়েছে ({deg}°)।"
+                elif action in ("look_right", "right"):
+                    deg = angle_deg if angle_deg is not None else 35.0
+                    self.head.look_right(deg)
+                    return f"মাথা ডানে ঘোরানো হয়েছে ({deg}°)।"
+                elif action in ("look_center", "center", "home"):
+                    self.head.look_center()
+                    return "মাথা সোজা সামনে রাখা হয়েছে।"
+                elif action == "nod":
+                    self.head.nod()
+                    return "মাথা নেড়ে সম্মতি জানানো হয়েছে।"
+                elif action == "shake":
+                    self.head.shake()
+                    return "মাথা ডানে-বামে নাড়ানো হয়েছে।"
+                elif action == "tilt":
+                    deg = angle_deg if angle_deg is not None else 10.0
+                    self.head.tilt(deg)
+                    return f"মাথা কাত করা হয়েছে ({deg}°)।"
+
+            # 2. Body / Waist rotation
+            elif part in ("body", "waist"):
+                if action in ("turn_left", "left"):
+                    deg = angle_deg if angle_deg is not None else 45.0
+                    self.head.pan(abs(deg))
+                    return f"বডি বাম দিকে ঘোরানো হয়েছে ({abs(deg)}°)।"
+                elif action in ("turn_right", "right"):
+                    deg = angle_deg if angle_deg is not None else 45.0
+                    self.head.pan(-abs(deg))
+                    return f"বডি ডান দিকে ঘোরানো হয়েছে ({abs(deg)}°)।"
+                elif action in ("center", "home"):
+                    self.head.look_center()
+                    return "বডি সেন্টারে আনা হয়েছে।"
+
+            # 3. Arm movements
+            elif part in ("right_arm", "left_arm", "both_arms"):
+                if part == "both_arms":
+                    if action in ("raise", "up"):
+                        self.arms.raise_both()
+                        return "দুই হাত উপরে তোলা হয়েছে।"
+                    elif action in ("lower", "down", "home"):
+                        self.arms.lower_both()
+                        return "দুই হাত নামানো হয়েছে।"
+                elif part == "right_arm":
+                    if action in ("raise", "up"):
+                        self.arms.raise_right()
+                        return "ডান হাত উপরে তোলা হয়েছে।"
+                    elif action in ("lower", "down", "home"):
+                        self.arms.set_right_arm(0.0)
+                        self.arms.set_right_arm_y(0.0)
+                        return "ডান হাত নামানো হয়েছে।"
+                    elif action == "wave":
+                        self.arms.wave_right(count=2)
+                        return "ডান হাত নেড়ে টা-টা জানানো হয়েছে।"
+                    elif action == "point":
+                        self.arms.point_right()
+                        return "ডান হাত দিয়ে সামনের দিকে নির্দেশ করা হয়েছে।"
+                elif part == "left_arm":
+                    if action in ("raise", "up"):
+                        self.arms.raise_left()
+                        return "বাম হাত উপরে তোলা হয়েছে।"
+                    elif action in ("lower", "down", "home"):
+                        self.arms.set_left_arm(0.0)
+                        self.arms.set_left_arm_y(0.0)
+                        return "বাম হাত নামানো হয়েছে।"
+                    elif action == "wave":
+                        self.arms.wave_left(count=2)
+                        return "বাম হাত নেড়ে টা-টা জানানো হয়েছে।"
+                    elif action == "point":
+                        self.arms.point_left()
+                        return "বাম হাত দিয়ে সামনের দিকে নির্দেশ করা হয়েছে।"
+
+            return f"অ্যাকশন '{action}' (অঙ্গ '{part}') সম্পন্ন করতে পারিনি।"
+        except Exception as e:
+            logger.error(f"Error controlling body part {part}: {e}")
+            return f"মুভমেন্ট করতে সমস্যা হয়েছে: {e}"
 
     def _tool_perform_gesture(self, gesture_name: str) -> str:
         func = getattr(self.gestures, gesture_name, None)

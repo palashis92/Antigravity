@@ -174,11 +174,11 @@ class ServoController:
                 logger.warning(f"I2C error setting servo {name} (ch{cal.channel}): {e}")
             self._last_move_time = time.time()
 
-    def move_joint(self, name: str, target_angle_deg: float, duration_s: float = 0.4) -> None:
+    def move_joint(self, name: str, target_angle_deg: float, duration_s: float = 0.25) -> None:
         """Move a single joint smoothly to target angle over duration."""
         self.move_multiple({name: target_angle_deg}, duration_s=duration_s)
 
-    def move_multiple(self, targets: Dict[str, float], duration_s: float = 0.4) -> None:
+    def move_multiple(self, targets: Dict[str, float], duration_s: float = 0.25) -> None:
         """Interpolate multiple joints simultaneously using eased trajectory."""
         with self._lock:
             start_angles = {k: self.current_angles.get(k, 0.0) for k in targets.keys()}
