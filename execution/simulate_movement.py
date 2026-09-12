@@ -38,8 +38,22 @@ from lumi.motion.servo_controller import ServoController
 class SimulationBackend:
     """Core kinematic backend wrapping the actual LUMI motion stack with telemetry hooks."""
 
-    def __init__(self) -> None:
-        self.driver = MockServoDriver()
+    def __init__(self, force_mock: bool = False) -> None:
+        self.is_real_hardware = False
+        if not force_mock:
+            try:
+                from lumi.hardware.servo_driver import PCA9685ServoDriver
+                hw = PCA9685ServoDriver()
+                if hw.initialize() and hw._is_hardware:
+                    self.driver = hw
+                    self.is_real_hardware = True
+                else:
+                    self.driver = MockServoDriver()
+            except Exception:
+                self.driver = MockServoDriver()
+        else:
+            self.driver = MockServoDriver()
+
         self.controller = ServoController(self.driver, auto_relax_delay_s=10.0)
         self.head = HeadController(self.controller)
         self.arms = ArmController(self.controller)
@@ -60,18 +74,102 @@ class SimulationBackend:
         self._lock = threading.RLock()
 
         # Intercept driver set_angle to capture 50Hz kinematic frames
-        orig_set_angle = self.driver.set_angle
-
-        def _intercept_set_angle(channel: int, angle: float) -> None:
-            orig_set_angle(channel, angle)
-            with self._lock:
-                self.angles[channel] = round(float(angle), 2)
-
-        self.driver.set_angle = _intercept_set_angle
+        orig_set_angle = getattr(self.driver, "set_angle", None)
+        if callable(orig_set_angle):
+            def _intercept_set_angle(channel: int, angle: float) -> None:
+                orig_set_angle(channel, angle)
+                with self._lock:
+                    self.angles[channel] = round(float(angle), 2)
+            self.driver.set_angle = _intercept_set_angle
 
         # Start controller background loop
         self.controller.initialize()
-        self.log("Simulation backend initialized with real LUMI motion stack.")
+        mode_str = "REAL HARDWARE (PCA9685)" if self.is_real_hardware else "VIRTUAL SIMULATION"
+        self.log(f"Simulation backend online in [{mode_str}] mode.")
+
+    def run_full_demo(self, print_fn=print) -> None:
+        """Execute a comprehensive, step-by-step motion demonstration."""
+        mode_str = "REAL PCA9685 HARDWARE" if self.is_real_hardware else "VIRTUAL SIMULATION"
+        print_fn("\n=======================================================")
+        print_fn(f"🤖 LUMI ROBOT FULL MOTION DEMO")
+        print_fn(f"   Mode: {mode_str}")
+        print_fn("=======================================================\n")
+
+        # Step 1: Head Tilt
+        print_fn("[1/7] Head Tilt Test (Ch 0)...")
+        print_fn("      -> Looking UP (-15°)...")
+        self.head.look_up(15.0, duration_s=0.35)
+        time.sleep(0.4)
+        print_fn("      -> Looking DOWN (+15°)...")
+        self.head.look_down(15.0, duration_s=0.35)
+        time.sleep(0.4)
+        print_fn("      -> Centering Head (0°)...")
+        self.head.look_center(duration_s=0.3)
+        time.sleep(0.3)
+
+        # Step 2: Body Waist
+        print_fn("[2/7] Body Waist Rotation (Ch 5)...")
+        print_fn("      -> Turning RIGHT (-45°)...")
+        self.head.look_right(45.0, duration_s=0.4)
+        time.sleep(0.4)
+        print_fn("      -> Turning LEFT (+45°)...")
+        self.head.look_left(45.0, duration_s=0.4)
+        time.sleep(0.4)
+        print_fn("      -> Returning Waist to Center (0°)...")
+        self.head.look_center(duration_s=0.3)
+        time.sleep(0.3)
+
+        # Step 3: Right Arm
+        print_fn("[3/7] Right Arm Test (Ch 1 Reach, Ch 3 Lift)...")
+        print_fn("      -> Raising Right Arm (-25° X)...")
+        self.arms.raise_right(duration_s=0.3)
+        time.sleep(0.3)
+        print_fn("      -> Waving Right Arm...")
+        self.arms.wave_right(count=2)
+        time.sleep(0.3)
+
+        # Step 4: Left Arm
+        print_fn("[4/7] Left Arm Test (Ch 2 Reach, Ch 4 Lift)...")
+        print_fn("      -> Raising Left Arm (+25° X)...")
+        self.arms.raise_left(duration_s=0.3)
+        time.sleep(0.3)
+        print_fn("      -> Waving Left Arm...")
+        self.arms.wave_left(count=2)
+        time.sleep(0.3)
+
+        # Step 5: Expressive Choreographies
+        print_fn("[5/7] Expressive Gestures...")
+        print_fn("      -> Greet Gesture...")
+        self.gestures.greet()
+        time.sleep(0.3)
+        print_fn("      -> Happy Gesture...")
+        self.gestures.happy()
+        time.sleep(0.3)
+        print_fn("      -> Dance Gesture...")
+        self.gestures.dance()
+        time.sleep(0.3)
+
+        # Step 6: Coordinated Simultaneous Motion
+        print_fn("[6/7] Simultaneous 6-Channel Parallel Motion...")
+        print_fn("      -> Both Arms Raised + Head Tilted...")
+        self.controller.move_multiple(
+            {
+                "head_tilt": -10.0,
+                "head_pan": 0.0,
+                "left_arm_x": 20.0,
+                "left_arm_y": 25.0,
+                "right_arm_x": -20.0,
+                "right_arm_y": -25.0,
+            },
+            duration_s=0.35,
+        )
+        time.sleep(0.5)
+
+        # Step 7: Homing
+        print_fn("[7/7] Returning all channels to safe Home (0.0°)...")
+        self.home_all(duration_s=0.35)
+        time.sleep(0.4)
+        print_fn("\n✅ FULL MOTION DEMO COMPLETED SUCCESSFULLY!\n")
 
     def get_angles(self) -> Dict[int, float]:
         """Fetch canonical physical angles directly from the kinematic controller."""
@@ -1109,9 +1207,20 @@ class WebSimulatorServer:
                 self.wfile.write(b'{"status":"ok"}')
 
         self.server = HTTPServer(("0.0.0.0", self.port), Handler)
+        local_ip = "127.0.0.1"
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            pass
+
         print(f"\n=======================================================")
         print(f"🚀 LUMI Web Motion Simulator running at:")
-        print(f"   http://localhost:{self.port}/")
+        print(f"   Local:   http://localhost:{self.port}/")
+        print(f"   Network: http://{local_ip}:{self.port}/  (Open this in your browser!)")
         print(f"=======================================================\n")
         try:
             self.server.serve_forever()
@@ -1119,33 +1228,140 @@ class WebSimulatorServer:
             pass
 
 
+def run_terminal_menu(backend: SimulationBackend) -> None:
+    """Interactive command-line movement controller and demo runner."""
+    while True:
+        mode_str = "REAL PCA9685 HARDWARE" if backend.is_real_hardware else "VIRTUAL SIMULATION"
+        print("\n=======================================================")
+        print("🤖 LUMI ROBOT MOVEMENT CONTROLLER & TESTER")
+        print(f"   Actuation Mode: {mode_str}")
+        print("=======================================================")
+        print("Select an action:")
+        print("  [1] ▶ Run Full Automatic Movement Demo")
+        print("  [2] Head Tilt Test (-15° Up -> +15° Down -> 0° Center)")
+        print("  [3] Body Waist Rotation (-45° Right -> +45° Left -> 0° Center)")
+        print("  [4] Right Arm Test (Lift + Wave)")
+        print("  [5] Left Arm Test (Lift + Wave)")
+        print("  [6] Gesture: Greet (Tilt + Right Wave)")
+        print("  [7] Gesture: Happy (Both Arms Up + Nod)")
+        print("  [8] Gesture: Dance (Waist Sway + Alternating Arms)")
+        print("  [9] Gesture: Celebrate (Both Arms Up + Excited Nod)")
+        print("  [0] Home All Joints (0.0° Safe Resting Position)")
+        print("  [w] Start Web Simulation Server (Port 8080)")
+        print("  [q] Quit")
+        print("-------------------------------------------------------")
+        try:
+            choice = input("Enter choice (default [1]): ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nExiting LUMI movement controller.")
+            break
+
+        if not choice or choice == "1":
+            backend.run_full_demo()
+        elif choice == "2":
+            print("Moving Head Tilt...")
+            backend.head.look_up(15.0, duration_s=0.35)
+            time.sleep(0.4)
+            backend.head.look_down(15.0, duration_s=0.35)
+            time.sleep(0.4)
+            backend.head.look_center(duration_s=0.3)
+        elif choice == "3":
+            print("Moving Body Waist...")
+            backend.head.look_right(45.0, duration_s=0.4)
+            time.sleep(0.4)
+            backend.head.look_left(45.0, duration_s=0.4)
+            time.sleep(0.4)
+            backend.head.look_center(duration_s=0.3)
+        elif choice == "4":
+            print("Testing Right Arm Wave...")
+            backend.arms.wave_right(count=2)
+        elif choice == "5":
+            print("Testing Left Arm Wave...")
+            backend.arms.wave_left(count=2)
+        elif choice == "6":
+            backend.trigger_gesture("greet")
+            time.sleep(1.5)
+        elif choice == "7":
+            backend.trigger_gesture("happy")
+            time.sleep(1.5)
+        elif choice == "8":
+            backend.trigger_gesture("dance")
+            time.sleep(2.0)
+        elif choice == "9":
+            backend.trigger_gesture("celebrate")
+            time.sleep(1.8)
+        elif choice == "0":
+            print("Homing all channels...")
+            backend.home_all(duration_s=0.4)
+        elif choice == "w":
+            server = WebSimulatorServer(backend, port=8080)
+            server.start()
+            break
+        elif choice in ("q", "exit"):
+            break
+        else:
+            print("Invalid selection. Please try again.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="LUMI Robot Motion Visual Simulator")
-    parser.add_argument("--web", action="store_true", help="Launch Web Browser Dashboard instead of Tkinter GUI")
+    parser.add_argument("--demo", action="store_true", help="Run full automated movement demonstration and exit")
+    parser.add_argument("--cli", action="store_true", help="Run interactive terminal menu")
+    parser.add_argument("--web", action="store_true", help="Launch Web Browser Dashboard")
+    parser.add_argument("--gui", action="store_true", help="Launch Desktop Tkinter GUI")
+    parser.add_argument("--mock", action="store_true", help="Force software simulation mock driver")
     parser.add_argument("--port", type=int, default=8080, help="Web port (default: 8080)")
+    # Also support positional arguments like 'python simulate_movement.py demo'
+    parser.add_argument("mode", nargs="?", default="", help="Optional mode: demo, web, cli, gui")
     args = parser.parse_args()
 
-    backend = SimulationBackend()
+    backend = SimulationBackend(force_mock=args.mock)
 
-    # Determine execution mode: Web vs Tkinter
-    run_web = args.web
-    if not run_web:
-        # Check if GUI display is available (Tkinter)
-        try:
-            import tkinter
-            # If on headless Linux without DISPLAY, fallback to web
-            if sys.platform != "win32" and "DISPLAY" not in os.environ:
-                print("Notice: No DISPLAY environment variable detected. Defaulting to Web mode.")
-                run_web = True
-        except Exception:
-            run_web = True
+    # 1. Direct Demo mode
+    if args.demo or args.mode.lower() == "demo":
+        backend.run_full_demo()
+        return
 
-    if run_web:
+    # 2. Web mode
+    if args.web or args.mode.lower() == "web":
         server = WebSimulatorServer(backend, port=args.port)
         server.start()
-    else:
-        app = DesktopSimulatorGUI(backend)
-        app.run()
+        return
+
+    # 3. CLI mode
+    if args.cli or args.mode.lower() == "cli":
+        run_terminal_menu(backend)
+        return
+
+    # 4. Explicit GUI mode
+    if args.gui or args.mode.lower() == "gui":
+        try:
+            app = DesktopSimulatorGUI(backend)
+            app.run()
+            return
+        except Exception as e:
+            print(f"Notice: GUI could not be opened ({e}). Falling back to Terminal Menu.")
+            run_terminal_menu(backend)
+            return
+
+    # 5. Default auto-detection mode:
+    # If on desktop OS with DISPLAY, try GUI; otherwise fall back to interactive CLI menu
+    gui_available = False
+    if sys.platform == "win32":
+        gui_available = True
+    elif "DISPLAY" in os.environ and os.environ["DISPLAY"]:
+        gui_available = True
+
+    if gui_available:
+        try:
+            app = DesktopSimulatorGUI(backend)
+            app.run()
+            return
+        except Exception as e:
+            print(f"Notice: Desktop GUI could not be initialized ({e}).")
+
+    # Headless / SSH terminal fallback: Run interactive terminal menu
+    run_terminal_menu(backend)
 
 
 if __name__ == "__main__":

@@ -33,15 +33,28 @@ class PCA9685ServoDriver(ServoDriverBase):
             import busio  # type: ignore
             from adafruit_pca9685 import PCA9685  # type: ignore
 
-            if self.i2c_bus == 1:
-                i2c = busio.I2C(board.SCL, board.SDA)
-            else:
+            i2c = None
+            # First try D5, D4 pins (tested on LUMI hardware in test_servo.py)
+            try:
+                if hasattr(board, "D5") and hasattr(board, "D4"):
+                    i2c = busio.I2C(board.D5, board.D4)
+                    logger.info("PCA9685 bound to I2C on pins D5 (SCL), D4 (SDA).")
+            except Exception as e:
+                logger.debug(f"D5/D4 I2C attempt failed: {e}")
+
+            # Fallback to standard SCL, SDA
+            if i2c is None:
                 try:
-                    from adafruit_extended_bus import ExtendedI2C as I2C
-                    i2c = I2C(self.i2c_bus)
-                except ImportError:
-                    logger.error("Please run: pip3 install adafruit-extended-bus")
-                    raise
+                    if self.i2c_bus == 1:
+                        i2c = busio.I2C(board.SCL, board.SDA)
+                    else:
+                        from adafruit_extended_bus import ExtendedI2C as I2C
+                        i2c = I2C(self.i2c_bus)
+                except Exception as e:
+                    logger.debug(f"Standard I2C attempt failed: {e}")
+
+            if i2c is None:
+                raise RuntimeError("No working I2C bus found for PCA9685.")
 
             self._pca = PCA9685(i2c, address=self.i2c_address)
             self._pca.frequency = self.pwm_frequency_hz  # type: ignore
