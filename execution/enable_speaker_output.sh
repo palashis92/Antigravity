@@ -18,7 +18,8 @@ fi
 
 echo "Unmuting and setting Speaker volume on card: $CARD_NAME..."
 
-# Enable Speaker output and set volume
+# Enable Speaker and PCM master digital output
+amixer -c "$CARD_NAME" sset 'PCM' 100% 2>/dev/null || amixer sset 'PCM' 100% 2>/dev/null
 amixer -c "$CARD_NAME" sset 'Speaker' 100% unmute 2>/dev/null || amixer sset 'Speaker' 100% unmute 2>/dev/null
 
 # Ensure DAC routing to speaker mixers is active on WM8960
