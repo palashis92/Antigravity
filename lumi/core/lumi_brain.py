@@ -77,8 +77,11 @@ class LumiBrain:
         # Audio & Speech Subsystems
         from ..audio.vad import VoiceActivityDetector
         from ..audio.speaker_id import SpeakerIdentifier
+        from ..audio.proximity_filter import ProximityAudioFilter
         self.vad = VoiceActivityDetector(aggressiveness=2)
         self.speaker_id = SpeakerIdentifier(self.memory, similarity_threshold=0.75)
+        self.proximity_filter = ProximityAudioFilter()
+        self._acoustic_overlap_active = False
         self._current_speaker: Optional[str] = None
         self._voice_buffer: bytearray = bytearray()  # Buffer for voice enrollment
         self._enrolling_voice_for: Optional[str] = None  # Person ID being enrolled
@@ -458,9 +461,12 @@ class LumiBrain:
                 time.sleep(0.01)
                 continue
 
-            # 1. Always push audio to Gemini Live (uninterrupted stream)
-            if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
-                self.realtime_voice.push_audio_chunk(chunk)
+            # 1. Push audio to Gemini Live (with proximity filtering)
+            num_faces = len(getattr(self, '_last_detected_faces', []))
+            is_overlap = (num_faces > 1) or getattr(self, '_acoustic_overlap_active', False)
+            if self.proximity_filter.should_pass(chunk, is_overlap):
+                if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
+                    self.realtime_voice.push_audio_chunk(chunk)
 
             # 2. Feed chunk through VAD pipeline
             from ..audio.vad import SpeechEvent
@@ -614,15 +620,15 @@ class LumiBrain:
         if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
             return  # Silent in meeting mode
 
-        logger.info("🔊 Overlapping speech detected! Asking people to take turns.")
-        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
-            import random
-            overlap_responses = [
-                "Multiple people are talking at once! Say in Bengali: 'আরে আরে, একজন একজন করে বলো! আমি তো সবার কথা একসাথে ধরতে পারি না!' Then laugh friendly.",
-                "You hear overlapping voices. Say in Bengali: 'একটু থামো থামো! কে আগে বলবে?' with a playful tone.",
-                "Too many voices at once! Say in Bengali: 'ভাই একসাথে বললে তো আমি বুঝি না! একজন বলো আগে!' Keep it humorous.",
-            ]
-            self.realtime_voice.inject_context(random.choice(overlap_responses))
+        logger.info("🔊 Overlapping speech detected! Activating proximity near-field filter.")
+        self._acoustic_overlap_active = True
+
+        # Auto-reset overlap flag after 6 seconds
+        def _reset_overlap():
+            time.sleep(6.0)
+            self._acoustic_overlap_active = False
+
+        threading.Thread(target=_reset_overlap, daemon=True, name="ResetOverlapFlag").start()
 
     def start_loops(self) -> None:
         """Starts the perception, audio listening, and Realtime Voice background threads."""

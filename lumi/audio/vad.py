@@ -108,6 +108,11 @@ class VoiceActivityDetector:
         """Set callback for when overlapping speech is detected."""
         self._on_overlap_detected = callback
 
+    @property
+    def is_speech_active(self) -> bool:
+        """Check if speech is currently active/ongoing."""
+        return self._is_speaking
+
     def process_chunk(self, chunk: bytes) -> SpeechEvent:
         """Process an audio chunk through the VAD pipeline.
 

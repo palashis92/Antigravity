@@ -22,7 +22,12 @@ import threading
 import time
 from typing import List, Optional, Tuple
 
-import numpy as np
+try:
+    import numpy as np
+    _HAS_NUMPY = True
+except ImportError:
+    np = None  # type: ignore
+    _HAS_NUMPY = False
 
 from ..core.logger import get_logger
 
@@ -50,6 +55,8 @@ class SpatialAudioProcessor:
         sample_rate: int = SAMPLE_RATE,
         beamform_direction: float = 0.0,
     ) -> None:
+        if not _HAS_NUMPY:
+            raise ImportError("numpy is required for SpatialAudioProcessor")
         self.mic_distance = mic_distance
         self.sample_rate = sample_rate
         self._beamform_direction = beamform_direction

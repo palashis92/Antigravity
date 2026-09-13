@@ -30,7 +30,7 @@ class DetectedFace:
 class FaceRecognitionService:
     """Detects and identifies faces, retrieving memory profiles and triggering consent workflows."""
 
-    def __init__(self, memory_manager: MemoryManager, recognition_threshold: float = 0.65) -> None:
+    def __init__(self, memory_manager: MemoryManager, recognition_threshold: float = 0.55) -> None:
         self.memory = memory_manager
         self.recognition_threshold = recognition_threshold
         self._cascade = None
@@ -40,8 +40,8 @@ class FaceRecognitionService:
 
         # Multi-frame voting for robust recognition
         self._recognition_buffer: Dict[str, List[str]] = {}  # track_id -> [person_name, ...]
-        self._buffer_size = 5  # Require 5 consistent frames
-        self._min_votes = 3    # At least 3 out of 5 must agree
+        self._buffer_size = 7  # Require 7 consistent frames (smoother against head tracking)
+        self._min_votes = 4    # At least 4 out of 7 must agree
         self._frame_counter = 0
 
     def _get_cascade(self, cv2: Any) -> Optional[Any]:
@@ -116,7 +116,7 @@ class FaceRecognitionService:
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=8, minSize=(100, 100)
+                gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50)
             )
 
             if len(faces) == 0:
@@ -148,9 +148,20 @@ class FaceRecognitionService:
                         distances = face_recognition.face_distance(known_embeddings, encoding)
                         if any(matches):
                             best_match_index = int(distances.argmin())
+                            best_dist = float(distances[best_match_index])
+                            best_person = known_person_objects[best_match_index]
                             if matches[best_match_index]:
-                                matched_person = known_person_objects[best_match_index]
+                                matched_person = best_person
                                 is_known = True
+                                logger.info(
+                                    f"Face recognized: {matched_person.name} "
+                                    f"(dist={best_dist:.3f} <= {self.recognition_threshold})"
+                                )
+                            else:
+                                logger.debug(
+                                    f"Face near-miss: {best_person.name} "
+                                    f"(dist={best_dist:.3f} > {self.recognition_threshold})"
+                                )
 
                     detected_faces.append(
                         DetectedFace(
@@ -195,8 +206,9 @@ class FaceRecognitionService:
         confirmed = []
         
         for face in faces:
-            # Create a simple spatial track ID based on face center region
-            cx, cy = int(face.center[0] // 80), int(face.center[1] // 80)
+            # Create a spatial track ID based on face center region
+            # 160px bins accommodate camera head motion without constantly resetting the track
+            cx, cy = int(face.center[0] // 160), int(face.center[1] // 160)
             track_id = f"{cx}_{cy}"
             
             # Get the name this frame matched
@@ -240,7 +252,7 @@ class FaceRecognitionService:
         
         # Clean up stale tracks (not seen for 50+ frames)
         if self._frame_counter % 50 == 0:
-            active_tracks = {f"{int(f.center[0] // 80)}_{int(f.center[1] // 80)}" for f in faces}
+            active_tracks = {f"{int(f.center[0] // 160)}_{int(f.center[1] // 160)}" for f in faces}
             stale = [k for k in self._recognition_buffer if k not in active_tracks]
             for k in stale:
                 del self._recognition_buffer[k]

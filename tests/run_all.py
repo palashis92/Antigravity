@@ -18,6 +18,7 @@ import tests.test_motion as tmot
 import tests.test_state_manager as tsm
 import tests.test_vision as tv
 import tests.test_anjum_mode as tanjum
+import tests.test_audio as taud
 
 
 class DummyMonkeypatch:
@@ -92,6 +93,13 @@ def main():
         ("test_counting_game_bengali_digits", tanjum.test_counting_game_bengali_digits, ()),
         ("test_counting_game_english_digits", tanjum.test_counting_game_english_digits, ()),
         ("test_identity_and_praise_speech", tanjum.test_identity_and_praise_speech, ()),
+        # Audio & Proximity Filtering
+        ("test_proximity_filter_silence", taud.test_proximity_filter_silence, ()),
+        ("test_proximity_filter_single_speaker", taud.test_proximity_filter_single_speaker, ()),
+        ("test_proximity_filter_overlap_near_field_priority", taud.test_proximity_filter_overlap_near_field_priority, ()),
+        ("test_proximity_filter_cooldown", taud.test_proximity_filter_cooldown, ()),
+        ("test_speaker_identifier_lifecycle", taud.test_speaker_identifier_lifecycle, ()),
+        ("test_speaker_identifier_cosine_similarity", taud.test_speaker_identifier_cosine_similarity, ()),
     ]
 
     for name, fn, args in tests_to_run:
