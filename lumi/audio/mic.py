@@ -226,3 +226,8 @@ class MicInterface:
 
     def unmute(self) -> None:
         self.is_muted = False
+
+    @property
+    def spatial_processor(self) -> Optional[Any]:
+        """Access the spatial processor from the underlying backend if available."""
+        return getattr(self.backend, "spatial_processor", None)

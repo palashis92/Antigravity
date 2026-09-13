@@ -82,6 +82,9 @@ class LumiBrain:
         self.speaker_id = SpeakerIdentifier(self.memory, similarity_threshold=0.75)
         self.proximity_filter = ProximityAudioFilter()
         self._acoustic_overlap_active = False
+        self._last_oriented_side: str = "center"
+        self._last_doa_orient_time: float = 0.0
+        self._last_speech_time: float = time.time()
         self._current_speaker: Optional[str] = None
         self._voice_buffer: bytearray = bytearray()  # Buffer for voice enrollment
         self._enrolling_voice_for: Optional[str] = None  # Person ID being enrolled
@@ -476,15 +479,30 @@ class LumiBrain:
             if self._enrolling_voice_for:
                 self._voice_buffer.extend(chunk)
 
-            # 4. Eye animation on speech detection
+            # 4. Eye animation & real-time DOA body orientation on speech detection
             energy = self._compute_rms(chunk)
             _debug_audio_frames += 1
             if _debug_audio_frames % 200 == 0:
                 logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
 
-            if event == SpeechEvent.SPEECH_START or energy > ENERGY_THRESHOLD:
+            if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy > ENERGY_THRESHOLD:
+                self._last_speech_time = time.time()
                 if self.state.current_state == BehaviorState.IDLE:
                     self.eyes.set_expression("curious")
+                # Real-time body orientation to localized sound source
+                if _debug_audio_frames % 10 == 0 or event == SpeechEvent.SPEECH_START:
+                    self._orient_body_to_sound_source()
+            elif event == SpeechEvent.SILENCE:
+                # Return to normal/center after 5s of silence if previously turned
+                now_s = time.time()
+                if self._last_oriented_side != "center" and (now_s - self._last_speech_time > 5.0):
+                    self._last_oriented_side = "center"
+                    self._last_doa_orient_time = now_s
+                    threading.Thread(
+                        target=lambda: self.head.look_center(duration_s=0.25),
+                        daemon=True,
+                        name="DOAReturnCenter",
+                    ).start()
 
             # 5. Overlap detection (check periodically during speech)
             if event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:
@@ -493,6 +511,59 @@ class LumiBrain:
                 self.vad.detect_overlap(num_faces)
             
             time.sleep(0.01)
+
+    def _orient_body_to_sound_source(self) -> None:
+        """Orient body waist servo in real-time based on DOA sound localization.
+
+        - Sound from center -> normal / center position (0°)
+        - Sound from left -> body servo turns left (+35°)
+        - Sound from right -> body servo turns right (-35°)
+        """
+        spatial = getattr(self.mic, "spatial_processor", None)
+        if not spatial and hasattr(self.mic, "backend"):
+            spatial = getattr(self.mic.backend, "spatial_processor", None)
+        if not spatial:
+            return
+
+        now = time.time()
+        # Rate-limit checks to prevent servo jitter
+        if now - self._last_doa_orient_time < 0.35:
+            return
+
+        # Do not interrupt expressive full-body gestures (dance, celebration, etc.)
+        if getattr(self.gestures, "is_playing", False):
+            return
+
+        side = getattr(spatial, "speaker_side", "center")
+        doa = getattr(spatial, "current_doa", 0.0)
+
+        # If already oriented to this side and within cooldown, nothing to do
+        if side == self._last_oriented_side and (now - self._last_doa_orient_time < 1.0):
+            return
+
+        if side == "center":
+            target_pan = 0.0
+        elif side == "left":
+            # Map DOA to pan angle (+25° to +60°)
+            target_pan = min(60.0, max(25.0, abs(doa)))
+        elif side == "right":
+            # Map DOA to pan angle (-25° to -60°)
+            target_pan = -min(60.0, max(25.0, abs(doa)))
+        else:
+            target_pan = 0.0
+
+        self._last_oriented_side = side
+        self._last_doa_orient_time = now
+        logger.info(f"🧭 Sound localized ({side}, DOA={doa:.1f}°). Orienting body pan to {target_pan:.1f}°")
+
+        # Asynchronously actuate body servo so audio streaming loop never blocks
+        def _move():
+            try:
+                self.head.pan(target_pan, duration_s=0.20)
+            except Exception as e:
+                logger.debug(f"DOA body pan error: {e}")
+
+        threading.Thread(target=_move, daemon=True, name="DOABodyOrient").start()
 
     def _on_speech_utterance(self, audio_bytes: bytes, duration: float) -> None:
         """Called by VAD when a complete speech utterance is ready.

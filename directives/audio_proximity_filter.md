@@ -38,6 +38,18 @@ Located in `lumi/audio/proximity_filter.py`:
 - `overlap_ratio` (default `0.55`): When multiple speakers are detected, a chunk must have RMS >= `55%` of the recent peak to pass. Higher (e.g. `0.70`) is stricter (only the loudest voice passes); lower (e.g. `0.40`) allows moderately loud voices.
 - `cooldown_chunks` (default `10` chunks = ~0.64s): After an overlap event subsides, keep filtering briefly to avoid capturing trailing speech from the background speaker.
 
+## Direction of Arrival (DOA) Real-Time Body Orientation
+LUMI uses the ReSpeaker 2-Mic Pi HAT array (`SpatialAudioProcessor` GCC-PHAT) to continuously compute the Direction of Arrival (DOA in degrees: -90° to +90°):
+- **Center (`-20° <= DOA <= +20°`)**: Body pan stays at home center position (`0°`).
+- **Left (`DOA < -20°`)**: Waist/body servo turns left (+25° to +60°).
+- **Right (`DOA > +20°`)**: Waist/body servo turns right (-25° to -60°).
+
+### Real-Time Performance Safeguard
+To guarantee zero audio latency and uninterrupted streaming to Gemini Live:
+- Servo movements are dispatched **asynchronously** in dedicated background threads (`name="DOABodyOrient"`).
+- Angular adjustments are rate-limited (`0.35s` min interval) with a deadband to avoid high-frequency motor twitching.
+- After 5 seconds of complete silence, LUMI gently returns to normal/center (`0°`).
+
 ## Verification
 Run audio unit tests:
 ```bash

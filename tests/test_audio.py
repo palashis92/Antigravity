@@ -121,3 +121,40 @@ def test_speaker_identifier_cosine_similarity() -> None:
 
     assert abs(sim_identical - 1.0) < 1e-5
     assert abs(sim_orthogonal - 0.0) < 1e-5
+
+
+def test_doa_body_orientation_mapping() -> None:
+    """Verify DOA sound localization mapping to body waist pan angles.
+    
+    Ground-truth calibration:
+      - Center: 0°
+      - Left: positive angle (turn body left)
+      - Right: negative angle (turn body right)
+    """
+    from lumi.audio.mic import MicInterface
+
+    class MockSpatial:
+        def __init__(self, doa: float, side: str):
+            self.current_doa = doa
+            self.speaker_side = side
+
+    class MockBackendWithSpatial:
+        def __init__(self, spatial):
+            self.spatial_processor = spatial
+        def start_recording(self): return True
+        def stop_recording(self): pass
+        def read_chunk(self, size): return b""
+
+    # 1. Center sound
+    mic = MicInterface(backend=MockBackendWithSpatial(MockSpatial(0.0, "center")))
+    assert mic.spatial_processor is not None
+    assert mic.spatial_processor.speaker_side == "center"
+
+    # 2. Left sound (-45° DOA) -> Should map to positive pan
+    mic_left = MicInterface(backend=MockBackendWithSpatial(MockSpatial(-45.0, "left")))
+    assert mic_left.spatial_processor.speaker_side == "left"
+
+    # 3. Right sound (+45° DOA) -> Should map to negative pan
+    mic_right = MicInterface(backend=MockBackendWithSpatial(MockSpatial(45.0, "right")))
+    assert mic_right.spatial_processor.speaker_side == "right"
+

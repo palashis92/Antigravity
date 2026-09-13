@@ -100,6 +100,7 @@ def main():
         ("test_proximity_filter_cooldown", taud.test_proximity_filter_cooldown, ()),
         ("test_speaker_identifier_lifecycle", taud.test_speaker_identifier_lifecycle, ()),
         ("test_speaker_identifier_cosine_similarity", taud.test_speaker_identifier_cosine_similarity, ()),
+        ("test_doa_body_orientation_mapping", taud.test_doa_body_orientation_mapping, ()),
     ]
 
     for name, fn, args in tests_to_run:
