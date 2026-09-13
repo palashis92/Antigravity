@@ -75,7 +75,7 @@ class SpeakerIdentifier:
         load_thread.start()
 
     def _resolve_model_path(self) -> Optional[str]:
-        """Locate an existing ONNX model file on disk."""
+        """Locate an existing ONNX model file on disk or auto-download if missing."""
         project_root = Path(__file__).resolve().parent.parent.parent
         for candidate in _MODEL_CANDIDATES:
             p = project_root / candidate
@@ -84,6 +84,22 @@ class SpeakerIdentifier:
             # Also check direct path relative to current working directory
             if os.path.exists(candidate) and os.path.getsize(candidate) > 10000:
                 return candidate
+
+        # Auto-download lightweight CAM++ model (~20MB) if missing
+        try:
+            import urllib.request
+            target_dir = project_root / "data" / "models"
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_file = target_dir / "campplus.onnx"
+            url = "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh_en_16k-common.onnx"
+            logger.info("Auto-downloading lightweight CAM++ Speaker ID model (~20MB)...")
+            urllib.request.urlretrieve(url, str(target_file))
+            if target_file.exists() and target_file.stat().st_size > 10000:
+                logger.info(f"Speaker ID model downloaded successfully to {target_file}")
+                return str(target_file)
+        except Exception as e:
+            logger.debug(f"Could not auto-download speaker ID model: {e}")
+
         return None
 
     def _load_encoder(self) -> None:

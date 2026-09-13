@@ -79,8 +79,35 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                     proc.stdin.write(audio_bytes)
                     proc.stdin.flush()
             except Exception as e:
-                logger.warning(f"Audio stream worker error: {e}")
+                if isinstance(e, (BrokenPipeError, OSError)):
+                    logger.debug(f"Audio stream worker pipe closed: {e}")
+                else:
+                    logger.warning(f"Audio stream worker error: {e}")
+                if proc is not None:
+                    try:
+                        if proc.stdin: proc.stdin.close()
+                    except Exception: pass
+                    try:
+                        if proc.stderr: proc.stderr.close()
+                    except Exception: pass
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=0.2)
+                    except Exception: pass
                 proc = None
+
+        if proc is not None:
+            try:
+                if proc.stdin: proc.stdin.close()
+            except Exception: pass
+            try:
+                if proc.stderr: proc.stderr.close()
+            except Exception: pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.2)
+            except Exception: pass
+            proc = None
 
     def _detect_alsa_device(self) -> None:
         """Find the MAX98357A card index automatically if available."""
@@ -218,9 +245,17 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         return True
 
     def stop(self) -> None:
+        self._stream_running = False
         if self._current_process is not None:
             try:
+                if self._current_process.stdin: self._current_process.stdin.close()
+            except Exception: pass
+            try:
+                if self._current_process.stderr: self._current_process.stderr.close()
+            except Exception: pass
+            try:
                 self._current_process.terminate()
+                self._current_process.wait(timeout=0.3)
             except Exception:
                 pass
             self._current_process = None

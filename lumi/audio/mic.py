@@ -64,12 +64,18 @@ class SystemMicBackend(MicBackendBase):
                     "-f", "S16_LE", "-r", str(self.sample_rate),
                     "-c", channels, "-t", "raw", "-q"
                 ]
+                proc = None
                 try:
-                    self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+                    self._proc = proc
                     time.sleep(0.5)
                     
-                    if self._proc is not None and self._proc.poll() is not None:
-                        err = self._proc.stderr.read().decode('utf-8', errors='ignore') if self._proc.stderr else ""
+                    if proc.poll() is not None:
+                        err = proc.stderr.read().decode('utf-8', errors='ignore') if proc.stderr else ""
+                        try:
+                            if proc.stderr: proc.stderr.close()
+                            if proc.stdout: proc.stdout.close()
+                        except Exception: pass
                         logger.error(f"arecord failed with stereo: {err.strip()}")
                         # Fallback to mono capture
                         logger.info("Falling back to mono capture...")
@@ -78,8 +84,7 @@ class SystemMicBackend(MicBackendBase):
 
                     logger.info(f"arecord running in STEREO mode (2 channels, {self.sample_rate}Hz)")
                     
-                    proc = self._proc
-                    while self._recording and proc and proc.poll() is None:
+                    while self._recording and proc.poll() is None:
                         if proc.stdout:
                             # Read 8192 bytes = 2048 stereo samples (4 bytes per sample)
                             chunk = proc.stdout.read(8192)
@@ -93,6 +98,18 @@ class SystemMicBackend(MicBackendBase):
                 except Exception as e:
                     logger.error(f"arecord error: {e}")
                     break
+                finally:
+                    if proc is not None:
+                        try:
+                            if proc.stdout: proc.stdout.close()
+                        except Exception: pass
+                        try:
+                            if proc.stderr: proc.stderr.close()
+                        except Exception: pass
+                        try:
+                            proc.terminate()
+                            proc.wait(timeout=0.2)
+                        except Exception: pass
         else:
             logger.warning("arecord not available on system.")
 
@@ -102,12 +119,13 @@ class SystemMicBackend(MicBackendBase):
         import time
         device = "plug:default" if self.alsa_device == "default" else self.alsa_device
         cmd = ["arecord", "-D", device, "-f", "S16_LE", "-r", str(self.sample_rate), "-c", "1", "-t", "raw", "-q"]
+        proc = None
         try:
-            self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
+            self._proc = proc
             time.sleep(0.5)
             logger.info("arecord running in MONO fallback mode")
-            proc = self._proc
-            while self._recording and proc and proc.poll() is None:
+            while self._recording and proc.poll() is None:
                 if proc.stdout:
                     chunk = proc.stdout.read(4096)
                     if chunk:
@@ -123,6 +141,18 @@ class SystemMicBackend(MicBackendBase):
                         self._enqueue(self._queue, bytes(stereo))
         except Exception as e:
             logger.error(f"Mono fallback arecord error: {e}")
+        finally:
+            if proc is not None:
+                try:
+                    if proc.stdout: proc.stdout.close()
+                except Exception: pass
+                try:
+                    if proc.stderr: proc.stderr.close()
+                except Exception: pass
+                try:
+                    proc.terminate()
+                    proc.wait(timeout=0.2)
+                except Exception: pass
 
     def _stereo_to_mono(self, stereo_chunk: bytes) -> bytes:
         """Convert stereo chunk to enhanced mono via spatial processing or simple mix."""

@@ -8,10 +8,17 @@ import urllib.parse
 import json
 from typing import Any, Callable, Dict, Optional
 
+import warnings
+
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
 except ImportError:
-    DDGS = None
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            from duckduckgo_search import DDGS
+    except ImportError:
+        DDGS = None
 
 from ..core.logger import get_logger
 

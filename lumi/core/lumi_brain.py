@@ -908,29 +908,30 @@ class LumiBrain:
                 person.notes = notes
             self.memory.update_person(person)
             
-            # Start voice enrollment in background
-            # Collect audio for 5 seconds to build a voice profile
-            self._voice_buffer = bytearray()
-            self._enrolling_voice_for = person.id
-
-            def _finish_enrollment():
-                time.sleep(5.0)  # Collect 5 seconds of audio
-                audio_data = bytes(self._voice_buffer)
-                self._enrolling_voice_for = None
+            # Start voice enrollment in background if engine available
+            if self.speaker_id and self.speaker_id.is_available():
                 self._voice_buffer = bytearray()
-                if len(audio_data) > 16000 * 2 * 1.5:  # At least 1.5 sec
-                    success = self.speaker_id.enroll_voice(person.id, audio_data)
-                    if success:
-                        logger.info(f"🎙️ Voice profile saved for {name}")
-                    else:
-                        logger.warning(f"Voice enrollment failed for {name}")
+                self._enrolling_voice_for = person.id
 
-            enrollment_thread = threading.Thread(
-                target=_finish_enrollment, daemon=True, name=f"VoiceEnroll_{name}"
-            )
-            enrollment_thread.start()
+                def _finish_enrollment():
+                    time.sleep(5.0)  # Collect 5 seconds of audio
+                    audio_data = bytes(self._voice_buffer)
+                    self._enrolling_voice_for = None
+                    self._voice_buffer = bytearray()
+                    if len(audio_data) >= 16000 * 2 * 1.2:  # At least 1.2 sec
+                        success = self.speaker_id.enroll_voice(person.id, audio_data)
+                        if success:
+                            logger.info(f"🎙️ Voice profile saved for {name}")
+                        else:
+                            logger.debug(f"Voice enrollment insufficient for {name}")
 
-            return f"Successfully memorized the face of {name} ({relationship}). Also enrolling their voice profile..."
+                enrollment_thread = threading.Thread(
+                    target=_finish_enrollment, daemon=True, name=f"VoiceEnroll_{name}"
+                )
+                enrollment_thread.start()
+                return f"Successfully memorized the face of {name} ({relationship}). Also enrolling their voice profile..."
+
+            return f"Successfully memorized the face of {name} ({relationship})."
         return f"Failed to save {name} to database."
 
     def _tool_memorize_fact(self, fact: str, person_name: Optional[str] = None) -> str:

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Mem0 Cloud API Engine for LUMI.
 
 Uses the official Mem0 managed platform (api.mem0.ai) to store and
@@ -75,12 +75,15 @@ class Mem0CloudEngine:
                 method="POST",
             )
 
-            with urllib.request.urlopen(req, timeout=10) as response:
+            with urllib.request.urlopen(req, timeout=5) as response:
                 res = json.loads(response.read().decode())
                 memories = [m.get("memory", "") for m in res if m.get("memory")]
                 return ", ".join(memories[:5]) if memories else ""
+        except (TimeoutError, urllib.error.URLError) as e:
+            logger.warning(f"Mem0 Cloud API search timed out or unreachable: {e}")
+            return ""
         except Exception as e:
-            logger.error(f"Mem0 Cloud API Search Error: {e}")
+            logger.warning(f"Mem0 Cloud API Search Error: {e}")
             return ""
 
     # ------------------------------------------------------------------

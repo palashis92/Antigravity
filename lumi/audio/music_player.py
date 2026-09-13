@@ -59,8 +59,7 @@ class MusicPlayer:
         # Check local cache first
         cached_file = self._find_cached_song(clean_query)
         if cached_file:
-            # Use the original query as title, not the sanitized filename
-            track_title = clean_query
+            track_title = Path(cached_file).stem
             logger.info(f"Playing cached music track: {cached_file}")
             return self._start_playback(cached_file, track_title)
 
@@ -133,6 +132,11 @@ class MusicPlayer:
                 "quiet": True,
                 "no_warnings": True,
                 "default_search": "ytsearch1",
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": ["android", "ios", "mweb", "web"],
+                    }
+                },
             }
             logger.info(f"Searching YouTube for '{query}' via yt_dlp library...")
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -165,6 +169,7 @@ class MusicPlayer:
                     "-x",
                     "--audio-format", "mp3",
                     "--audio-quality", "192K",
+                    "--extractor-args", "youtube:player_client=android,ios,web",
                     "-o", target_template,
                     "--no-playlist",
                     "--quiet",
