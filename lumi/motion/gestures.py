@@ -38,6 +38,11 @@ class GestureManager:
         self._current_gesture_thread = t
         t.start()
 
+    @property
+    def is_playing(self) -> bool:
+        """Return True if a gesture choreography is actively executing."""
+        return bool(self._current_gesture_thread and self._current_gesture_thread.is_alive())
+
     # -------------------------------------------------------------------------
     # Core Gesture Choreographies
     # -------------------------------------------------------------------------

@@ -132,14 +132,20 @@ class FaceRecognitionService:
                 face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
                 known_persons = self.memory.list_people()
-                known_embeddings = [p.face_embedding for p in known_persons if p.face_embedding]
-                known_person_objects = [p for p in known_persons if p.face_embedding]
 
                 for (x, y, w, h), encoding in zip(faces, face_encodings):
                     center_x = x + w / 2.0
                     center_y = y + h / 2.0
                     matched_person = None
                     is_known = False
+
+                    # Only compare against embeddings matching the current vector dimension
+                    valid_known = [
+                        p for p in known_persons
+                        if p.face_embedding and len(p.face_embedding) == len(encoding)
+                    ]
+                    known_embeddings = [p.face_embedding for p in valid_known]
+                    known_person_objects = valid_known
 
                     if known_embeddings:
                         matches = face_recognition.compare_faces(
