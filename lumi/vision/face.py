@@ -40,8 +40,8 @@ class FaceRecognitionService:
 
         # Multi-frame voting for robust recognition
         self._recognition_buffer: Dict[str, List[str]] = {}  # track_id -> [person_name, ...]
-        self._buffer_size = 7  # Require 7 consistent frames (smoother against head tracking)
-        self._min_votes = 4    # At least 4 out of 7 must agree
+        self._buffer_size = 4  # 4 frames buffer (~0.6s at 6.6 FPS) for responsive recognition
+        self._min_votes = 2    # At least 2 votes needed to confirm
         self._frame_counter = 0
 
     def _get_cascade(self, cv2: Any) -> Optional[Any]:

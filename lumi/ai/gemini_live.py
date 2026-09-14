@@ -441,8 +441,25 @@ class GeminiLiveClient:
         except Exception as e:
             logger.warning(f"Gemini receive loop Exception: {e}. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")
 
-    def inject_context(self, text: str) -> None:
+    def inject_context(self, text: str, trigger_response: bool = False) -> None:
+        """Inject system or event context into the active Gemini Live session.
         
+        Args:
+            text: The contextual instruction or memory to inject.
+            trigger_response: If True (e.g. for greetings/events), sets turnComplete=True
+                              so Gemini immediately speaks and acts on this context.
+                              If False (default for background updates/memories), Gemini quietly assimilates it.
+        """
+        # Simple duplicate suppression within 10 seconds
+        now = time.time()
+        if hasattr(self, "_last_injected_text") and self._last_injected_text == text:
+            if (now - getattr(self, "_last_injected_time", 0.0)) < 10.0:
+                logger.debug("Suppressing duplicate context injection within 10s.")
+                return
+
+        self._last_injected_text = text
+        self._last_injected_time = now
+
         async def _send_when_ready() -> None:
             # Wait up to 10 seconds for websocket to be ready
             for _ in range(100):
@@ -463,11 +480,12 @@ class GeminiLiveClient:
                             "parts": [{"text": text}]
                         }
                     ],
-                    "turnComplete": True
+                    "turnComplete": trigger_response
                 }
             }
             try:
                 await ws.send(json.dumps(event))
+                logger.info(f"Context injected into Gemini Live (trigger_response={trigger_response}).")
             except Exception as e:
                 logger.warning(f"Failed to inject context: {e}")
 

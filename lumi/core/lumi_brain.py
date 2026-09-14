@@ -803,87 +803,111 @@ class LumiBrain:
             person = face.person
             self.active_person = person
             self._last_face_seen_time = time.time()
-            if self.face_service.should_interact(person.id, cooldown_s=60.0):
+            if self.face_service.should_interact(person.id, cooldown_s=25.0):
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
                 
-                if hasattr(self.realtime_voice, "inject_context"):
-                    relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
-                    notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
-                    
-                    fact_str = "None"
-                    if hasattr(self.mem0, "recall_facts_sync"):
-                        fact_str = self.mem0.recall_facts_sync(person.id)
-                    else:
-                        recent_facts = self.memory.recall_facts(person_id=person.id)
-                        if recent_facts:
-                            fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
-                    
-                    # Check for unread messages
-                    unread_msgs = ""
-                    if hasattr(self.memory, "get_unread_messages"):
-                        msgs = self.memory.get_unread_messages(person.id)
-                        if msgs:
-                            msg_texts = [f"From {m['sender_name']}: {m['message_text']}" for m in msgs]
-                            unread_msgs = f"\nURGENT: YOU HAVE UNREAD MESSAGES FOR {person.name}: {', '.join(msg_texts)}. YOU MUST TELL THEM THIS MESSAGE IMMEDIATELY AS SOON AS YOU GREET THEM!"
-                            self.memory.mark_messages_read(person.id)
-                    
-                    prompt = (
-                        f"CRITICAL CONTEXT: You are currently talking to {person.name} ({relationship}). "
-                        f"Notes about them: {notes}. "
-                        f"Recent memories you saved: {fact_str}. {unread_msgs}\n"
-                        "When using these memories, remember that YOU are talking TO this person. "
-                        "Acknowledge them naturally, warmly, and politely in conversational Bengali (বাংলা). "
-                        "Do not mention their notes or memories mechanically, but use them naturally. "
-                        
-                        "Also casually ask what brings them here today, or if they have any message for Palash (assuming Palash is not here right now). "
-                        "If they want to leave a message, use the 'leave_message' tool. "
-                        "CRITICAL RULE FOR APPEARANCE: Only compliment their appearance (dress, hair, etc.) if you "
-                        "CLEARLY and UNMISTAKABLY see something specific in the camera feed right now. "
-                        "If the camera feed is unclear, or you just see a face/wall without distinct clothing, "
-                        "DO NOT make up a compliment. A forced or fake compliment feels unnatural."
-                    )
-                    self.realtime_voice.inject_context(prompt)
+                relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
+                notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
+                
+                fact_str = "None"
+                if hasattr(self.mem0, "recall_facts_sync"):
+                    fact_str = self.mem0.recall_facts_sync(person.id)
+                else:
+                    recent_facts = self.memory.recall_facts(person_id=person.id)
+                    if recent_facts:
+                        fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
+                
+                # Check for unread messages
+                unread_msgs = ""
+                if hasattr(self.memory, "get_unread_messages"):
+                    msgs = self.memory.get_unread_messages(person.id)
+                    if msgs:
+                        msg_texts = [f"From {m['sender_name']}: {m['message_text']}" for m in msgs]
+                        unread_msgs = f"\nURGENT: YOU HAVE UNREAD MESSAGES FOR {person.name}: {', '.join(msg_texts)}. YOU MUST TELL THEM THIS MESSAGE IMMEDIATELY AS SOON AS YOU GREET THEM!"
+                        self.memory.mark_messages_read(person.id)
+                
+                prompt = (
+                    f"[VISUAL EVENT: You just saw {person.name} ({relationship}) in front of the camera right now!]\n"
+                    f"Notes about them: {notes}. "
+                    f"Recent memories: {fact_str}. {unread_msgs}\n"
+                    f"INSTRUCTION: Greet {person.name} immediately, warmly, and naturally in conversational Bengali (বাংলা). "
+                    "Do not mention reading notes or memories mechanically. "
+                    "CRITICAL RULE: Do NOT ask if they have a message for Palash unless they explicitly ask for him. "
+                    "Focus on greeting them naturally as a familiar friend! Do not repeat previous greetings or phrases."
+                )
+                
+                is_gemini_ready = getattr(self.realtime_voice, "_is_ready", False) and getattr(self.realtime_voice, "_ws", None)
+                if is_gemini_ready:
+                    self.realtime_voice.inject_context(prompt, trigger_response=True)
+                elif hasattr(self, "tts") and hasattr(self, "speaker"):
+                    import random
+                    local_greetings = [
+                        f"হ্যালো {person.name}! কেমন আছো?",
+                        f"আরে {person.name}! তোমাকে দেখে খুব ভালো লাগলো!",
+                        f"এই যে {person.name}! কেমন কাটছে তোমার দিন?"
+                    ]
+                    greeting_text = random.choice(local_greetings)
+                    audio_path = self.tts.synthesize(greeting_text)
+                    if audio_path:
+                        self.speaker.play_file(audio_path, block=False)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
         else:
             # Unknown person learning hook
             if hasattr(self.face_service, "set_pending_face"):
                 self.face_service.set_pending_face(face.embedding)
             
-            if self.face_service.should_interact("unknown", cooldown_s=60.0):
+            now_t = time.time()
+            if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) >= 20.0:
+                self._last_unknown_greeting_time = now_t
+                self.state.transition_to(BehaviorState.GREETING, reason="spot_unknown")
                 self.eyes.set_expression("curious")
-                if hasattr(self.realtime_voice, "inject_context"):
-                    import random
-                    # Varied unknown person greetings for natural feel
-                    unknown_prompts = [
-                        (
-                            "A new person appeared! You don't know them. "
-                            "In Bengali, greet warmly: 'তোমাকে তো চিনতে পারছি না! তুমি কে?' "
-                            "Ask their name. If they are looking for Palash, say he's not here and ask if they want to leave a message. "
-                            "If yes, use 'leave_message' tool. Also use 'memorize_person' to save their name."
-                        ),
-                        (
-                            "Someone unfamiliar is standing in front of you. Be curious! "
-                            "In Bengali, say 'আরে, নতুন কেউ এসেছে! পরিচয়টা দাও তো!' "
-                            "Subtly ask if they came to see Palash or have a message for him. "
-                            "When they tell their name, call 'memorize_person'."
-                        ),
-                        (
-                            "A stranger appeared! Act naturally surprised and curious. "
-                            "In Bengali, say 'ওহ, তোমাকে তো আগে দেখিনি! কী নাম তোমার?' "
-                            "Ask their name and if they need to leave a message for your owner Palash (who is away). "
-                            "Use 'memorize_person' tool once they introduce themselves."
-                        ),
-                        (
-                            "You see an unknown face! Greet them in Bengali with friendly curiosity. "
-                            "Say something like 'এই যে! তুমি নতুন মুখ! আমি তো তোমাকে চিনি না!' "
-                            "Ask their name and if they have a message for Palash. If they share their name, save with 'memorize_person'. "
-                            "CRITICAL RULE: Do not compliment their appearance unless you clearly see something very distinct."
-                        ),
+                self.gestures.play_async(self.gestures.greet, name="greet_unknown")
+                
+                import random
+                unknown_prompts = [
+                    (
+                        "[VISUAL EVENT: An unfamiliar person has just appeared in front of your camera right now!]\n"
+                        "INSTRUCTION: Greet them immediately, warmly, and with friendly curiosity in Bengali (বাংলা).\n"
+                        "- First introduce yourself as LUMI ('আমি লুমি').\n"
+                        "- Ask for their name with friendly interest ('তোমাকে তো আগে দেখিনি! তোমার নাম কী?' বা 'পরিচয়টা দাও তো!').\n"
+                        "- CRITICAL RULE: Do NOT ask if they have a message for Palash right now, and do NOT say 'পলাশ নেই' on first contact. First introduce yourself, make friends, and ask their name! Only mention Palash later in conversation if they ask for him.\n"
+                        "- When they tell you their name, you can remember them with the 'memorize_person' tool.\n"
+                        "- Do NOT repeat the exact same sentence if you just said it. Keep it natural and fresh!"
+                    ),
+                    (
+                        "[VISUAL EVENT: A new visitor is standing in front of you!]\n"
+                        "INSTRUCTION: Greet them with cheerful surprise in Bengali (বাংলা).\n"
+                        "- Say something lively like: 'আরে, নতুন একজন বন্ধু এসেছে! আমি লুমি, তোমার নাম কী বলো তো?'\n"
+                        "- Focus completely on introducing yourself and getting to know them.\n"
+                        "- Do NOT ask if they have a message for Palash on first meeting.\n"
+                        "- Be friendly, sweet, and invite them to chat!"
+                    ),
+                    (
+                        "[VISUAL EVENT: You see a new face in front of your camera!]\n"
+                        "INSTRUCTION: Greet them warmly and politely in conversational Bengali (বাংলা).\n"
+                        "- Say: 'হ্যালো! তোমাকে তো আগে দেখিনি। আমি লুমি! তোমার পরিচয়টা কী জানতে পারি?'\n"
+                        "- Let the conversation flow naturally. Do NOT mention Palash right away.\n"
+                        "- Keep your response short, sweet, and human-like."
+                    ),
+                ]
+                prompt = random.choice(unknown_prompts)
+                
+                is_gemini_ready = getattr(self.realtime_voice, "_is_ready", False) and getattr(self.realtime_voice, "_ws", None)
+                if is_gemini_ready:
+                    self.realtime_voice.inject_context(prompt, trigger_response=True)
+                elif hasattr(self, "tts") and hasattr(self, "speaker"):
+                    local_greetings = [
+                        "হ্যালো! আমি লুমি। তোমাকে তো আগে দেখিনি, তোমার নাম কী?",
+                        "আরে, নতুন বন্ধু! আমি লুমি। তোমার পরিচয়টা দাও তো!",
+                        "ওহ, হ্যালো! আমি লুমি। তোমার নাম কী বলো তো?"
                     ]
-                    prompt = random.choice(unknown_prompts)
-                    self.realtime_voice.inject_context(prompt)
+                    greeting_text = random.choice(local_greetings)
+                    audio_path = self.tts.synthesize(greeting_text)
+                    if audio_path:
+                        self.speaker.play_file(audio_path, block=False)
+                self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
 
     # =========================================================================
     # Realtime Tools Implementation
