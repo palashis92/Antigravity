@@ -128,24 +128,83 @@ class ArmController:
             duration_s=duration_s,
         )
 
+    def set_arm_pose(
+        self,
+        left_x: float = 0.0,
+        left_y: float = 0.0,
+        right_x: float = 0.0,
+        right_y: float = 0.0,
+        duration_s: float = 0.25,
+    ) -> None:
+        """Simultaneously coordinate all 4 arm servos (2-DOF per arm)."""
+        self.current_left_x = left_x
+        self.current_left_y = left_y
+        self.current_right_x = right_x
+        self.current_right_y = right_y
+        self.controller.move_multiple(
+            {
+                "left_arm_x": left_x,
+                "left_arm_y": left_y,
+                "right_arm_x": right_x,
+                "right_arm_y": right_y,
+            },
+            duration_s=duration_s,
+        )
+
+    def reach_forward_left(self, y_deg: float = 35.0, x_deg: float = 15.0, duration_s: float = 0.28) -> None:
+        """Reach left hand forward prominently on the Y-axis."""
+        self.current_left_x = x_deg
+        self.current_left_y = y_deg
+        self.controller.move_multiple(
+            {"left_arm_x": x_deg, "left_arm_y": y_deg}, duration_s=duration_s
+        )
+
+    def reach_forward_right(self, y_deg: float = -35.0, x_deg: float = -15.0, duration_s: float = 0.28) -> None:
+        """Reach right hand forward prominently on the Y-axis."""
+        self.current_right_x = x_deg
+        self.current_right_y = y_deg
+        self.controller.move_multiple(
+            {"right_arm_x": x_deg, "right_arm_y": y_deg}, duration_s=duration_s
+        )
+
+    def open_hands(self, forward_deg: float = 28.0, lift_deg: float = 12.0, duration_s: float = 0.3) -> None:
+        """Open both hands forward towards user in welcoming conversational posture."""
+        self.set_arm_pose(
+            left_x=lift_deg,
+            left_y=forward_deg,
+            right_x=-lift_deg,
+            right_y=-forward_deg,
+            duration_s=duration_s,
+        )
+
+    def shrug(self, lift_deg: float = 15.0, forward_deg: float = 18.0, duration_s: float = 0.28) -> None:
+        """Expressive human-like shrug moving both elevation and reach axes."""
+        self.set_arm_pose(
+            left_x=lift_deg,
+            left_y=forward_deg,
+            right_x=-lift_deg,
+            right_y=-forward_deg,
+            duration_s=duration_s,
+        )
+
     def wave_right(self, count: int = 3) -> None:
-        """Perform a friendly right-hand wave gesture."""
+        """Perform a friendly right-hand wave gesture with dynamic Y-axis reach."""
         for _ in range(count):
             self.controller.move_multiple(
                 {"right_arm_x": -25.0, "right_arm_y": -45.0}, duration_s=0.2
             )
             self.controller.move_multiple(
-                {"right_arm_x": -15.0, "right_arm_y": -10.0}, duration_s=0.2
+                {"right_arm_x": -15.0, "right_arm_y": -15.0}, duration_s=0.2
             )
         self.arms_home(duration_s=0.25)
 
     def wave_left(self, count: int = 3) -> None:
-        """Perform a friendly left-hand wave gesture."""
+        """Perform a friendly left-hand wave gesture with dynamic Y-axis reach."""
         for _ in range(count):
             self.controller.move_multiple(
                 {"left_arm_x": 25.0, "left_arm_y": 45.0}, duration_s=0.2
             )
             self.controller.move_multiple(
-                {"left_arm_x": 15.0, "left_arm_y": 10.0}, duration_s=0.2
+                {"left_arm_x": 15.0, "left_arm_y": 15.0}, duration_s=0.2
             )
         self.arms_home(duration_s=0.25)

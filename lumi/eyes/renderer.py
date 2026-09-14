@@ -74,6 +74,16 @@ class EyeRenderer:
         self._saccade_y = 0.0
         self._next_saccade_time = 0.0
 
+        # Conversational & Micro-life Dynamics
+        self._is_speaking = False
+        self._speaking_until = 0.0
+        self._last_expr_set_time = time.time()
+        self._auto_settle_timeout = 3.5  # seconds before expressive emotion auto-returns to neutral
+        self._micro_glance_x = 0.0
+        self._micro_glance_y = 0.0
+        self._next_glance_time = time.time() + random.uniform(2.0, 4.0)
+        self._glance_end_time = 0.0
+
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
@@ -125,7 +135,14 @@ class EyeRenderer:
                 expr = EXPRESSIONS.get("neutral")
             if expr:
                 self.target_expr = expr
+            self._last_expr_set_time = time.time()
             logger.debug(f"Eye expression set to '{expression_name}'")
+
+    def set_speaking(self, duration_s: float = 1.0) -> None:
+        """Inform eye renderer that LUMI is actively speaking for duration_s."""
+        with self._lock:
+            self._is_speaking = True
+            self._speaking_until = max(self._speaking_until, time.time() + duration_s)
 
     def set_gaze(self, gaze_x: float, gaze_y: float) -> None:
         """Set normalized gaze vector (-1.0 to +1.0)."""
@@ -421,6 +438,33 @@ class EyeRenderer:
                     self._animation_end_time = None
                     self._animation_frames = []
 
+                # --- Expression Auto-Settle to Neutral ---
+                # If an expressive emotion was set (happy, curious, surprised, thinking),
+                # automatically settle back to neutral after a period of calm.
+                if self.target_expr.name not in ["neutral", "listening", "speaking"] and not self.is_sleeping:
+                    if (now - self._last_expr_set_time) > self._auto_settle_timeout:
+                        self.target_expr = EXPRESSIONS.get("neutral", self.target_expr)
+
+                # --- Speaking State Tracking ---
+                if now > self._speaking_until:
+                    self._is_speaking = False
+
+                # --- Conversational Micro-Glances (Gaze shifts while speaking) ---
+                if self._is_speaking and not self.is_sleeping:
+                    if now >= self._next_glance_time:
+                        # Dart eyes subtly to the side or up (typical human cognitive glance during speech)
+                        self._micro_glance_x = random.choice([-8.0, -5.0, 5.0, 8.0])
+                        self._micro_glance_y = random.uniform(-6.0, 4.0)
+                        self._glance_end_time = now + random.uniform(0.3, 0.6)
+                        self._next_glance_time = now + random.uniform(2.5, 4.5)
+                    elif now > self._glance_end_time:
+                        # Return to neutral forward gaze
+                        self._micro_glance_x = 0.0
+                        self._micro_glance_y = 0.0
+                else:
+                    self._micro_glance_x = 0.0
+                    self._micro_glance_y = 0.0
+
                 # --- Procedural Eyes Logic ---
                 # Process Blinking Logic
                 if not self._is_blinking and not self.is_sleeping and now >= self._next_blink_time:
@@ -435,11 +479,18 @@ class EyeRenderer:
                     self._saccade_x = 0.0
                     self._saccade_y = 0.0
 
-                # Smooth Gaze Lerp with safety clamping (-35 to +35)
-                target_gx = max(-35.0, min(35.0, self.gaze_x + self._saccade_x))
-                target_gy = max(-25.0, min(25.0, self.gaze_y + self._saccade_y))
+                # Smooth Gaze Lerp with safety clamping (-35 to +35), factoring in micro-glances
+                effective_gx = self.gaze_x + self._saccade_x + self._micro_glance_x
+                effective_gy = self.gaze_y + self._saccade_y + self._micro_glance_y
+                target_gx = max(-35.0, min(35.0, effective_gx))
+                target_gy = max(-25.0, min(25.0, effective_gy))
                 self._smooth_gaze_x += (target_gx - self._smooth_gaze_x) * 0.35
                 self._smooth_gaze_y += (target_gy - self._smooth_gaze_y) * 0.35
+
+                # Subtle pupil breathing pulse while speaking
+                breathe_delta = 0.0
+                if self._is_speaking and not self.is_sleeping:
+                    breathe_delta = math.sin(now * 3.5) * 1.5
 
                 blink_cover = 0.0
                 if self.is_sleeping:
@@ -456,11 +507,11 @@ class EyeRenderer:
 
                 # Render frames
                 if self.single_display_both_eyes:
-                    single_frame = self._draw_both_eyes_single_frame(blink_cover)
+                    single_frame = self._draw_both_eyes_single_frame(blink_cover, breathe_delta=breathe_delta)
                     self.display.draw_eyes(single_frame, None)
                 else:
-                    left_frame = self._draw_single_eye(is_left=True, blink_cover=blink_cover)
-                    right_frame = self._draw_single_eye(is_left=False, blink_cover=blink_cover)
+                    left_frame = self._draw_single_eye(is_left=True, blink_cover=blink_cover, breathe_delta=breathe_delta)
+                    right_frame = self._draw_single_eye(is_left=False, blink_cover=blink_cover, breathe_delta=breathe_delta)
                     self.display.draw_eyes(left_frame, right_frame)
             except Exception as e:
                 logger.debug(f"EyeRenderer frame error: {e}")
@@ -526,17 +577,17 @@ class EyeRenderer:
             hl_y = cy - h_radius * 0.32
             draw.ellipse([hl_x - hl_r, hl_y - hl_r, hl_x + hl_r, hl_y + hl_r], fill=(255, 255, 255))
 
-    def _draw_both_eyes_single_frame(self, blink_cover: float = 0.0) -> Any:
+    def _draw_both_eyes_single_frame(self, blink_cover: float = 0.0, breathe_delta: float = 0.0) -> Any:
         """Render both Left and Right eyes side-by-side onto a single 240x240 display buffer."""
         expr = self.target_expr
         if _HAS_PIL:
             img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Colors & Dimensions from Eyes.cpp
+            # Colors & Dimensions from Eyes.cpp (with subtle breathing pulse)
             color = expr.iris_color_rgb
-            base_w = self.w_eye / 2.0  # radius X = 20
-            base_h = self.h_eye / 2.0  # radius Y = 35
+            base_w = max(4.0, (self.w_eye / 2.0) + (breathe_delta * 0.6))  # radius X = ~20
+            base_h = max(4.0, (self.h_eye / 2.0) + breathe_delta)           # radius Y = ~35
 
             # Dynamic squash factor
             left_blink = blink_cover
@@ -573,13 +624,13 @@ class EyeRenderer:
                 "blink": blink_cover,
             }
 
-    def _draw_single_eye(self, is_left: bool, blink_cover: float = 0.0) -> Any:
+    def _draw_single_eye(self, is_left: bool, blink_cover: float = 0.0, breathe_delta: float = 0.0) -> Any:
         """Render a single full-screen 240x240 round eye buffer for dual separate displays."""
         expr = self.target_expr
         cx = self.width / 2.0 + self._smooth_gaze_x
         cy = self.height / 2.0 + self._smooth_gaze_y
-        r_w = self.w_eye * 1.2
-        r_h = max(0.0, (self.h_eye * 1.2) * (1.0 - blink_cover))
+        r_w = max(4.0, (self.w_eye * 1.2) + (breathe_delta * 0.8))
+        r_h = max(0.0, ((self.h_eye * 1.2) + (breathe_delta * 1.2)) * (1.0 - blink_cover))
 
         if _HAS_PIL:
             img = Image.new("RGB", (self.width, self.height), (0, 0, 0))

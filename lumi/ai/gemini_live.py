@@ -70,6 +70,7 @@ class GeminiLiveClient:
         self.wake_audio_path = self.tts.synthesize("জ্বী বলুন")
         
         self._last_video_send = 0.0
+        self._last_speech_motion_time = 0.0
 
     def start(self) -> None:
         if self._running: return
@@ -347,6 +348,19 @@ class GeminiLiveClient:
                                         self._speaker_active_until = now + duration + 0.5
                                         
                                     self.speaker.play_stream(audio_bytes, sample_rate=24000)
+
+                                    # Update eyes speaking state
+                                    if self.eyes and hasattr(self.eyes, "set_speaking"):
+                                        self.eyes.set_speaking(duration_s=duration + 0.5)
+
+                                    # Naturally move hands (Y-axis) & head co-verbally while speaking
+                                    if self.gestures and hasattr(self.gestures, "play_conversational_step"):
+                                        if (now - self._last_speech_motion_time) > 1.8 and not self.gestures.is_playing:
+                                            self._last_speech_motion_time = now
+                                            self.gestures.play_async(
+                                                self.gestures.play_conversational_step,
+                                                name="conversational_step"
+                                            )
                                 elif "text" in part:
                                     txt = part["text"]
                                     print(f"🤖 [LUMI (Live)]: {txt}")
@@ -355,6 +369,8 @@ class GeminiLiveClient:
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
+                            if self.gestures and hasattr(self.gestures, "idle_pose"):
+                                self.gestures.play_async(self.gestures.idle_pose, name="interrupted_reset")
                             
                     # Sometimes transcriptions arrive outside modelTurn (e.g. BidiGenerateContentServerMessage)
                     if "serverContent" in data:
@@ -385,6 +401,9 @@ class GeminiLiveClient:
                                 self.event_bus.emit("conversation.turn_complete", data={"user": u_text, "lumi": l_text})
                             user_buffer.clear()
                             lumi_buffer.clear()
+                            # Smoothly return arms to neutral rest pose when turn finishes
+                            if self.gestures and hasattr(self.gestures, "idle_pose"):
+                                self.gestures.play_async(self.gestures.idle_pose, name="turn_complete_rest")
                             
                     # Handle Tool Calls
                     if "toolCall" in data:
