@@ -82,8 +82,12 @@ class LumiBrain:
         self.speaker_id = SpeakerIdentifier(self.memory, similarity_threshold=0.75)
         self.proximity_filter = ProximityAudioFilter()
         self._acoustic_overlap_active = False
-        self._last_oriented_side: str = "center"
-        self._last_doa_orient_time: float = 0.0
+        # Visual Tracking & Target-Lost Search state
+        self._last_face_seen_time: float = 0.0
+        self._last_face_exit_side: str = "center"  # "left", "right", or "center"
+        self._had_tracked_face: bool = False
+        self._search_phase: int = 0  # 0: tracking, 1: searched exit side, 2: scanned opposite side, 3: returned center
+        self._last_search_move_time: float = 0.0
         self._last_speech_time: float = time.time()
         self._current_speaker: Optional[str] = None
         self._voice_buffer: bytearray = bytearray()  # Buffer for voice enrollment
@@ -479,7 +483,7 @@ class LumiBrain:
             if self._enrolling_voice_for:
                 self._voice_buffer.extend(chunk)
 
-            # 4. Eye animation & real-time DOA body orientation on speech detection
+            # 4. Eye animation on speech detection (DOA sound orientation disabled)
             energy = self._compute_rms(chunk)
             _debug_audio_frames += 1
             if _debug_audio_frames % 200 == 0:
@@ -489,20 +493,6 @@ class LumiBrain:
                 self._last_speech_time = time.time()
                 if self.state.current_state == BehaviorState.IDLE:
                     self.eyes.set_expression("curious")
-                # Real-time body orientation to localized sound source
-                if _debug_audio_frames % 10 == 0 or event == SpeechEvent.SPEECH_START:
-                    self._orient_body_to_sound_source()
-            elif event == SpeechEvent.SILENCE:
-                # Return to normal/center after 5s of silence if previously turned
-                now_s = time.time()
-                if self._last_oriented_side != "center" and (now_s - self._last_speech_time > 5.0):
-                    self._last_oriented_side = "center"
-                    self._last_doa_orient_time = now_s
-                    threading.Thread(
-                        target=lambda: self.head.look_center(duration_s=0.25),
-                        daemon=True,
-                        name="DOAReturnCenter",
-                    ).start()
 
             # 5. Overlap detection (check periodically during speech)
             if event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:
@@ -511,59 +501,6 @@ class LumiBrain:
                 self.vad.detect_overlap(num_faces)
             
             time.sleep(0.01)
-
-    def _orient_body_to_sound_source(self) -> None:
-        """Orient body waist servo in real-time based on DOA sound localization.
-
-        - Sound from center -> normal / center position (0°)
-        - Sound from left -> body servo turns left (+35°)
-        - Sound from right -> body servo turns right (-35°)
-        """
-        spatial = getattr(self.mic, "spatial_processor", None)
-        if not spatial and hasattr(self.mic, "backend"):
-            spatial = getattr(self.mic.backend, "spatial_processor", None)
-        if not spatial:
-            return
-
-        now = time.time()
-        # Rate-limit checks to prevent servo jitter
-        if now - self._last_doa_orient_time < 0.35:
-            return
-
-        # Do not interrupt expressive full-body gestures (dance, celebration, etc.)
-        if getattr(self.gestures, "is_playing", False):
-            return
-
-        side = getattr(spatial, "speaker_side", "center")
-        doa = getattr(spatial, "current_doa", 0.0)
-
-        # If already oriented to this side and within cooldown, nothing to do
-        if side == self._last_oriented_side and (now - self._last_doa_orient_time < 1.0):
-            return
-
-        if side == "center":
-            target_pan = 0.0
-        elif side == "left":
-            # Map DOA to pan angle (+25° to +60°)
-            target_pan = min(60.0, max(25.0, abs(doa)))
-        elif side == "right":
-            # Map DOA to pan angle (-25° to -60°)
-            target_pan = -min(60.0, max(25.0, abs(doa)))
-        else:
-            target_pan = 0.0
-
-        self._last_oriented_side = side
-        self._last_doa_orient_time = now
-        logger.info(f"🧭 Sound localized ({side}, DOA={doa:.1f}°). Orienting body pan to {target_pan:.1f}°")
-
-        # Asynchronously actuate body servo so audio streaming loop never blocks
-        def _move():
-            try:
-                self.head.pan(target_pan, duration_s=0.20)
-            except Exception as e:
-                logger.debug(f"DOA body pan error: {e}")
-
-        threading.Thread(target=_move, daemon=True, name="DOABodyOrient").start()
 
     def _on_speech_utterance(self, audio_bytes: bytes, duration: float) -> None:
         """Called by VAD when a complete speech utterance is ready.
@@ -749,6 +686,63 @@ class LumiBrain:
         faces = self.face_service.detect_and_recognize(face_frame)
         if not faces:
             self._last_detected_faces = []
+            now = time.time()
+            # If we were tracking someone who just left the camera frame:
+            if self._had_tracked_face and not getattr(self.gestures, "is_playing", False):
+                time_since_lost = now - self._last_face_seen_time
+
+                # Phase 1: Target just walked out of camera view (0.5s - 2.5s ago)
+                # Move in the direction they were heading/exited!
+                if 0.5 <= time_since_lost < 2.5 and self._search_phase == 0:
+                    self._search_phase = 1
+                    self._last_search_move_time = now
+
+                    # Determine exit direction:
+                    # In camera coordinates: left side of image (x < center) is robot's left (+ pan)
+                    # right side of image (x > center) is robot's right (- pan)
+                    if self._last_face_exit_side == "right" or self.head.current_pan < -10.0:
+                        search_pan = -55.0  # Turn right (safe within -70°)
+                        gaze_x = 0.8
+                    elif self._last_face_exit_side == "left" or self.head.current_pan > 10.0:
+                        search_pan = 55.0   # Turn left (safe within +70°)
+                        gaze_x = -0.8
+                    else:
+                        search_pan = -45.0  # Default right scan
+                        gaze_x = 0.6
+
+                    logger.info(f"👀 Face moved out of frame ({self._last_face_exit_side}). Panning to {search_pan:.1f}° to reacquire target...")
+                    self.eyes.set_expression("curious")
+                    self.eyes.set_gaze(gaze_x, 0.0)
+                    self.head.pan(search_pan, duration_s=0.35)
+
+                # Phase 2: Still not found after ~2.5s - 5.5s
+                # Pan to the opposite direction to see if someone is over there!
+                elif 2.5 <= time_since_lost < 5.5 and self._search_phase == 1 and (now - self._last_search_move_time >= 1.5):
+                    self._search_phase = 2
+                    self._last_search_move_time = now
+
+                    # Opposite direction
+                    if self.head.current_pan < 0:
+                        opposite_pan = 50.0  # Turn left
+                        gaze_x = -0.7
+                    else:
+                        opposite_pan = -50.0  # Turn right
+                        gaze_x = 0.7
+
+                    logger.info(f"🔍 Face not found in exit direction. Scanning opposite side ({opposite_pan:.1f}°)...")
+                    self.eyes.set_expression("thinking")
+                    self.eyes.set_gaze(gaze_x, 0.0)
+                    self.head.pan(opposite_pan, duration_s=0.45)
+
+                # Phase 3: Still no one after 5.5s
+                # Return smoothly to center/home and rest
+                elif time_since_lost >= 5.5 and self._search_phase == 2 and (now - self._last_search_move_time >= 1.8):
+                    self._search_phase = 3
+                    self._had_tracked_face = False
+                    logger.info("🏠 Search complete. No face detected. Returning head and gaze to center.")
+                    self.eyes.set_expression("neutral")
+                    self.eyes.set_gaze(0.0, 0.0)
+                    self.head.look_center(duration_s=0.35)
             return
 
         self._last_detected_faces = faces
@@ -756,18 +750,33 @@ class LumiBrain:
         faces = self.face_service.confirm_identity(faces)
         
         face = faces[0]
+        now = time.time()
+        self._last_face_seen_time = now
+        self._had_tracked_face = True
+        self._search_phase = 0  # Face is acquired, reset search state
+
+        # Track exit side
+        frame_w = self.settings.vision.frame_width
+        frame_h = self.settings.vision.frame_height
+        if face.center[0] > (frame_w * 0.55):
+            self._last_face_exit_side = "right"
+        elif face.center[0] < (frame_w * 0.45):
+            self._last_face_exit_side = "left"
+        else:
+            self._last_face_exit_side = "center"
+
         person_data = {
             "name": face.person.name if face.is_known and face.person else "Unknown",
             "is_known": face.is_known,
         }
         self.event_bus.emit("vision.face_detected", data={"person": person_data}, source="vision")
 
-        # Smoothly track face with head servos
-        self.head.track_bounding_box(face.center[0], face.center[1])
+        # Smoothly track face with head servos (strictly constrained by safe limits)
+        self.head.track_bounding_box(face.center[0], face.center[1], frame_w=frame_w, frame_h=frame_h)
         
         # Track face with procedural eyes
-        gaze_x = (face.center[0] / self.settings.vision.frame_width) * 2.0 - 1.0
-        gaze_y = (face.center[1] / self.settings.vision.frame_height) * 2.0 - 1.0
+        gaze_x = (face.center[0] / frame_w) * 2.0 - 1.0
+        gaze_y = (face.center[1] / frame_h) * 2.0 - 1.0
         self.eyes.set_gaze(gaze_x, gaze_y)
 
         # Steer microphone beamformer towards the active face

@@ -15,13 +15,21 @@ logger = get_logger("motion.head")
 class HeadController:
     """Controls robot head orientation, face tracking, and idle gestures."""
 
+    # Safe kinematic limits ensuring servo never hits physical stops or exceeds rotation limits
+    SAFE_MIN_PAN: float = -70.0   # Turn right max
+    SAFE_MAX_PAN: float = 70.0    # Turn left max
+    SAFE_MIN_TILT: float = -12.0  # Tilt up max
+    SAFE_MAX_TILT: float = 12.0   # Tilt down max
+
     def __init__(self, controller: ServoController) -> None:
         self.controller = controller
         self.current_pan = 0.0
         self.current_tilt = 0.0
 
     def look_at(self, pan_deg: float, tilt_deg: float, duration_s: float = 0.22) -> None:
-        """Orient head to specific pan/tilt angles with responsive easing."""
+        """Orient head to specific pan/tilt angles with responsive easing and safety limits."""
+        pan_deg = max(self.SAFE_MIN_PAN, min(self.SAFE_MAX_PAN, float(pan_deg)))
+        tilt_deg = max(self.SAFE_MIN_TILT, min(self.SAFE_MAX_TILT, float(tilt_deg)))
         self.current_pan = pan_deg
         self.current_tilt = tilt_deg
         self.controller.move_multiple(
@@ -34,29 +42,29 @@ class HeadController:
         self.look_at(0.0, 0.0, duration_s=duration_s)
 
     def look_left(self, deg: float = 35.0, duration_s: float = 0.22) -> None:
-        """Turn head/body left (+90° = left)."""
+        """Turn head/body left (+70° = left max)."""
         self.look_at(abs(deg), self.current_tilt, duration_s=duration_s)
 
     def look_right(self, deg: float = 35.0, duration_s: float = 0.22) -> None:
-        """Turn head/body right (-90° = right)."""
+        """Turn head/body right (-70° = right max)."""
         self.look_at(-abs(deg), self.current_tilt, duration_s=duration_s)
 
-    def look_up(self, deg: float = 15.0, duration_s: float = 0.2) -> None:
-        """Tilt head up (-15° = up)."""
+    def look_up(self, deg: float = 12.0, duration_s: float = 0.2) -> None:
+        """Tilt head up (-12° = up)."""
         self.look_at(self.current_pan, -abs(deg), duration_s=duration_s)
 
-    def look_down(self, deg: float = 15.0, duration_s: float = 0.2) -> None:
-        """Tilt head down (+15° = down)."""
+    def look_down(self, deg: float = 12.0, duration_s: float = 0.2) -> None:
+        """Tilt head down (+12° = down)."""
         self.look_at(self.current_pan, abs(deg), duration_s=duration_s)
 
     def pan(self, deg: float, duration_s: float = 0.22) -> None:
-        """Set head/body pan angle directly (+90° = left, -90° = right)."""
-        clamped = max(-90.0, min(90.0, deg))
+        """Set head/body pan angle directly (+70° = left, -70° = right)."""
+        clamped = max(self.SAFE_MIN_PAN, min(self.SAFE_MAX_PAN, deg))
         self.look_at(clamped, self.current_tilt, duration_s=duration_s)
 
     def tilt(self, deg: float, duration_s: float = 0.2) -> None:
-        """Set head tilt angle directly (-15° = up, +15° = down)."""
-        clamped = max(-15.0, min(15.0, deg))
+        """Set head tilt angle directly (-12° = up, +12° = down)."""
+        clamped = max(self.SAFE_MIN_TILT, min(self.SAFE_MAX_TILT, deg))
         self.look_at(self.current_pan, clamped, duration_s=duration_s)
 
     def nod(self, count: int = 2, amplitude_deg: float = 12.0) -> None:
@@ -102,8 +110,8 @@ class HeadController:
         else:
             delta_tilt = err_y * 20.0 * gain
 
-        target_pan = max(-90.0, min(90.0, self.current_pan + delta_pan))
-        target_tilt = max(-15.0, min(15.0, self.current_tilt + delta_tilt))
+        target_pan = max(self.SAFE_MIN_PAN, min(self.SAFE_MAX_PAN, self.current_pan + delta_pan))
+        target_tilt = max(self.SAFE_MIN_TILT, min(self.SAFE_MAX_TILT, self.current_tilt + delta_tilt))
 
         if abs(delta_pan) > 0.4 or abs(delta_tilt) > 0.4:
             self.look_at(target_pan, target_tilt, duration_s=0.12)
