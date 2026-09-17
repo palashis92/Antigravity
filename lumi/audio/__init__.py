@@ -1,7 +1,6 @@
 """Audio input and output subsystem for LUMI."""
 
 from .mic import MicInterface
-from .music_player import MusicPlayer
 from .proximity_filter import ProximityAudioFilter
 from .spatial import SpatialAudioProcessor
 from .speaker import SpeakerInterface
@@ -10,7 +9,6 @@ from .vad import SpeechEvent, VoiceActivityDetector
 
 __all__ = [
     "MicInterface",
-    "MusicPlayer",
     "ProximityAudioFilter",
     "SpatialAudioProcessor",
     "SpeakerIdentifier",

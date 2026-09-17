@@ -101,11 +101,9 @@ class LumiBrain:
         self.meeting_manager = MeetingManager(self.memory.db)
         self.stt = BanglaSTT()
 
-        # Music & WhatsApp Integrations Subsystems
-        from ..audio.music_player import MusicPlayer
+        # WhatsApp Integrations Subsystems
         from ..integrations.whatsapp import WhatsAppClient
         from ..integrations.message_polisher import refine_whatsapp_message
-        self.music_player = MusicPlayer(self.speaker)
         self.whatsapp = WhatsAppClient()
         self.refine_message = refine_whatsapp_message
 
@@ -178,17 +176,6 @@ class LumiBrain:
                 "description": {"type": "string", "description": "Optional details about the reminder."}
             },
             "required": ["title", "remind_at_iso"]
-        })
-        self.tools.register("play_music", self._tool_play_music, "Play a requested song or music track by title/query (e.g. 'Stereo Love'). Searches YouTube, caches and streams through speaker.", {
-            "type": "object",
-            "properties": {
-                "song_name": {"type": "string", "description": "Name or query of the song to play."}
-            },
-            "required": ["song_name"]
-        })
-        self.tools.register("stop_music", self._tool_stop_music, "Stop currently playing music or song.", {
-            "type": "object",
-            "properties": {}
         })
         self.tools.register("show_animal_animation", self._tool_show_animal_animation, "Show an animal animation/image on your screen. Call this when the user asks how an animal sounds or acts, while SIMULTANEOUSLY using your voice to mimic the animal sound.", {
             "type": "object",
@@ -1351,31 +1338,6 @@ class LumiBrain:
     def _tool_send_email(self, to_address: str, subject: str, message: str) -> str:
         logger.info(f"Mock sending Email to {to_address} with subject '{subject}': {message}")
         return f"Email successfully queued to {to_address}."
-
-    def _tool_play_music(self, song_name: str) -> str:
-        """Search and play a requested song or music track."""
-        if not hasattr(self, "music_player"):
-            return "মিউজিক প্লেয়ার সাবসিস্টেম প্রস্তুত নয়।"
-
-        # Indicate excited / listening on eyes
-        self.eyes.set_expression("excited")
-        logger.info(f"Requested music: '{song_name}'")
-        success, msg = self.music_player.play(song_name)
-        if success:
-            self.eyes.set_expression("happy")
-            return msg
-        else:
-            self.eyes.set_expression("sad")
-            return msg
-
-    def _tool_stop_music(self) -> str:
-        """Stop music playback."""
-        if not hasattr(self, "music_player"):
-            return "মিউজিক প্লেয়ার প্রস্তুত নয়।"
-
-        self.music_player.stop()
-        self.eyes.set_expression("neutral")
-        return "গান বাজানো বন্ধ করা হয়েছে।"
 
     def _tool_send_whatsapp(self, recipient: str, message: str, polish_message: bool = True) -> str:
         """Send a WhatsApp message with AI refinement and contact resolution."""
