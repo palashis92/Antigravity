@@ -32,7 +32,31 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             target=self._stream_worker_loop, daemon=True, name="I2SStreamWorker"
         )
         self._stream_thread.start()
+        self._unmute_and_max_alsa_mixer()
         logger.info(f"Speaker initialized on ALSA device {self.alsa_device}")
+
+    def _unmute_and_max_alsa_mixer(self) -> None:
+        """Force ALSA mixer controls (especially Seeed Voicecard PCM) to 100% and unmuted."""
+        controls = ["PCM", "Playback", "Headphone", "Line", "HP DAC", "Line DAC", "Speaker"]
+        cards = ["seeed2micvoicec", "default"]
+        for card in cards:
+            for ctrl in controls:
+                try:
+                    subprocess.run(
+                        ["amixer", "-c", card, "set", ctrl, "100%"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                    subprocess.run(
+                        ["amixer", "-c", card, "set", ctrl, "unmute"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                except Exception:
+                    pass
+
 
     def _stream_worker_loop(self) -> None:
         """Background worker thread feeding streaming audio chunks to a persistent aplay process."""
