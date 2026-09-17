@@ -93,54 +93,19 @@ pip install \
 echo "[5b/7] Installing face_recognition (this may take a while on Pi)..."
 pip install face_recognition || echo "WARNING: face_recognition install failed. Face ID will use detection-only mode."
 
-# 6. Install systemd service
-echo "[6/7] Installing systemd service..."
-SERVICE_PATH="/etc/systemd/system/lumi-robot.service"
-
-# Generate the service file with correct paths
-cat > /tmp/lumi-robot.service << EOF
-[Unit]
-Description=LUMI AI Companion Robot Service
-After=multi-user.target sound.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$ACTUAL_USER
-WorkingDirectory=$PROJECT_DIR
-EnvironmentFile=$PROJECT_DIR/.env
-ExecStart=$VENV_DIR/bin/python -m lumi.main
-Restart=on-failure
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-KillSignal=SIGINT
-TimeoutStopSec=10
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo cp /tmp/lumi-robot.service "$SERVICE_PATH"
-sudo systemctl daemon-reload
-sudo systemctl enable lumi-robot.service
-
-# 7. Set correct ownership
-echo "[7/7] Setting file permissions..."
+# 6. Set correct ownership
+echo "[6/7] Setting file permissions..."
 sudo chown -R "$ACTUAL_USER:$ACTUAL_USER" "$PROJECT_DIR"
 
 echo "=========================================================="
-echo "LUMI setup complete!"
+echo "LUMI environment setup complete!"
 echo ""
 echo "  venv:    $VENV_DIR"
-echo "  service: $SERVICE_PATH"
 echo ""
 echo "Next steps:"
 echo "  1. Create .env file:  nano $PROJECT_DIR/.env"
-echo "     Add: INWORLD_API_KEY=your-key"
-echo "     Add: OPENAI_API_KEY=your-key"
+echo "     Add: GEMINI_API_KEY=your-key"
+echo "     Add: MEM0_API_KEY=your-key  (optional)"
 echo ""
-echo "  2. Reboot:  sudo reboot"
-echo ""
-echo "  3. After reboot, test:  cd $PROJECT_DIR && source venv/bin/activate && python -m lumi.main"
+echo "  2. Run manually:  cd $PROJECT_DIR && source venv/bin/activate && python3 -m lumi.main"
 echo "=========================================================="
