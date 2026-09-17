@@ -252,6 +252,25 @@ class LumiBrain:
             "properties": {}
         })
         
+        self.tools.register("set_silent_mode", self._tool_set_silent_mode,
+            "CALL THIS when the user explicitly tells you to be silent/quiet/still/not talk for a specific time period "
+            "(e.g. 'চুপ থাকো', 'কথা বলো না', 'শান্ত থাকো', 'নিশ্চল থাকো', 'বলো না'). "
+            "During silent mode LUMI will stop all greetings, movements, and spontaneous speech until the specified time.",
+            {
+                "type": "object",
+                "properties": {
+                    "duration_seconds": {
+                        "type": "number",
+                        "description": "Number of seconds to remain silent. Use this OR silent_until_iso."
+                    },
+                    "silent_until_iso": {
+                        "type": "string",
+                        "description": "ISO 8601 datetime string until which to remain silent (e.g. '2026-09-17T23:56:00'). Use this OR duration_seconds."
+                    }
+                }
+            }
+        )
+
         from ..ai.gemini_live import GeminiLiveClient
         
         self.conversation = ConversationEngine(self.memory, self.tools)
@@ -285,6 +304,8 @@ class LumiBrain:
         self._running = False
         self._perception_thread: Optional[threading.Thread] = None
         self._audio_thread: Optional[threading.Thread] = None
+        # Silent mode: when set, suppress all greetings, gestures, and triggered injections until this timestamp
+        self._silent_until: float = 0.0
 
         self._subscribe_events()
 
@@ -813,6 +834,10 @@ class LumiBrain:
             self.active_person = person
             self._last_face_seen_time = time.time()
             if self.face_service.should_interact(person.id, cooldown_s=25.0):
+                # If LUMI is in silent mode, skip all greeting speech, gestures, and animations
+                if self._is_silent():
+                    logger.info(f"Silent mode active: suppressing greeting for {person.name}.")
+                    return
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
@@ -869,6 +894,9 @@ class LumiBrain:
             
             now_t = time.time()
             if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) >= 20.0:
+                if self._is_silent():
+                    logger.info("Silent mode active: suppressing unknown-person greeting.")
+                    return
                 self._last_unknown_greeting_time = now_t
                 self.state.transition_to(BehaviorState.GREETING, reason="spot_unknown")
                 self.eyes.set_expression("curious")
@@ -1101,6 +1129,35 @@ class LumiBrain:
             logger.error(f"Vision describe error: {e}")
             return "I'm having trouble understanding what I see right now."
 
+
+    def _is_silent(self) -> bool:
+        """Return True if LUMI is in a user-commanded silent period."""
+        return time.time() < self._silent_until
+
+    def _tool_set_silent_mode(self, duration_seconds: Optional[float] = None, silent_until_iso: Optional[str] = None) -> str:
+        """Activate silent mode — suppress all greetings, gestures, and spontaneous speech."""
+        from datetime import datetime
+        now = time.time()
+
+        if silent_until_iso:
+            try:
+                dt = datetime.fromisoformat(silent_until_iso)
+                self._silent_until = dt.timestamp()
+                remaining = max(0, self._silent_until - now)
+                logger.info(f"Silent mode activated until {silent_until_iso} ({remaining:.0f}s from now).")
+                return f"silent_mode_active_until:{silent_until_iso}"
+            except Exception as e:
+                logger.warning(f"set_silent_mode: bad ISO string '{silent_until_iso}': {e}")
+
+        if duration_seconds and duration_seconds > 0:
+            self._silent_until = now + duration_seconds
+            logger.info(f"Silent mode activated for {duration_seconds:.0f}s.")
+            return f"silent_mode_active_for:{duration_seconds:.0f}s"
+
+        # Default: 5 minutes
+        self._silent_until = now + 300.0
+        logger.info("Silent mode activated for 5 minutes (default).")
+        return "silent_mode_active_for:300s"
 
     def _tool_analyze_plant(self) -> str:
         frame = self.camera.get_frame()
