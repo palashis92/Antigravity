@@ -1,11 +1,15 @@
-"""Chessboard Vision Service: Board Detection, Piece Identification, and FEN Generation."""
+"""Chessboard Vision Service: Board Detection, Piece Identification, and FEN Generation.
+
+Uses Gemini Vision (google-genai SDK) to analyse a chessboard photo and return
+the FEN string, which is then fed to Stockfish for best-move analysis.
+"""
 
 from __future__ import annotations
 
-import base64
 import json
 import os
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
 from ..core.logger import get_logger
@@ -19,102 +23,123 @@ class ChessVisionResult:
     is_valid_board: bool
     confidence: float
     white_to_move: bool = True
-    active_squares: List[str] = None
+    active_squares: List[str] = field(default_factory=list)
 
 
 class ChessVision:
-    """Detects physical chessboard grid and generates Forsyth-Edwards Notation (FEN)."""
+    """Detects physical chessboard grid and generates Forsyth-Edwards Notation (FEN).
+
+    Uses the Gemini Vision API (via google-genai SDK) to interpret a raw camera
+    frame of a physical chessboard and return a valid FEN string.  The FEN is
+    then passed to Stockfish for engine-level best-move analysis.
+    """
+
+    _PROMPT = (
+        "You are a chess expert. Look at this photo of a physical chessboard carefully.\n"
+        "Return ONLY a JSON object (no markdown, no extra text) with these fields:\n"
+        '  "fen": "<standard FEN string of the current board position>",\n'
+        '  "confidence": <float between 0.0 and 1.0>,\n'
+        '  "white_to_move": <true or false>\n'
+        "Assume the side closest to the camera is White unless the board orientation is clearly different.\n"
+        "If the image does not show a chessboard, return: "
+        '{"fen": "", "confidence": 0.0, "white_to_move": true}'
+    )
 
     def __init__(self) -> None:
-        self.model_path = os.path.join("data", "models", "chess_pieces.tflite")
+        self._api_key: Optional[str] = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def extract_fen_from_frame(self, frame: Any) -> ChessVisionResult:
-        """Process image frame of a physical chessboard and generate FEN."""
+        """Process a BGR camera frame and return a FEN + metadata."""
         if frame is None:
+            return ChessVisionResult(fen_string="", is_valid_board=False, confidence=0.0)
+
+        # Encode frame to JPEG bytes
+        try:
+            import cv2
+            ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            if not ok:
+                raise RuntimeError("cv2.imencode failed")
+            image_bytes = buf.tobytes()
+        except Exception as e:
+            logger.error(f"Frame encoding failed: {e}")
+            return ChessVisionResult(fen_string="", is_valid_board=False, confidence=0.0)
+
+        # Ask Gemini to parse the board
+        try:
+            return self._analyse_with_gemini(image_bytes)
+        except Exception as e:
+            logger.error(f"Gemini chess analysis failed: {e}")
+            return ChessVisionResult(fen_string="", is_valid_board=False, confidence=0.0)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _get_api_key(self) -> Optional[str]:
+        if not self._api_key:
+            self._api_key = os.getenv("GEMINI_API_KEY")
+        return self._api_key
+
+    def _analyse_with_gemini(self, image_bytes: bytes) -> ChessVisionResult:
+        """Send the image to Gemini Vision and parse the JSON response."""
+        api_key = self._get_api_key()
+        if not api_key:
+            raise RuntimeError("GEMINI_API_KEY environment variable is not set.")
+
+        import google.generativeai as genai  # type: ignore
+        import PIL.Image
+        import io
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        pil_image = PIL.Image.open(io.BytesIO(image_bytes))
+
+        response = model.generate_content(
+            [self._PROMPT, pil_image],
+            generation_config=genai.GenerationConfig(
+                temperature=0.1,
+                max_output_tokens=256,
+            ),
+        )
+
+        raw = response.text.strip()
+        logger.debug(f"Gemini chess raw response: {raw}")
+
+        # Strip markdown code fences if present
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+
+        data = json.loads(raw)
+        fen: str = data.get("fen", "").strip()
+        confidence: float = float(data.get("confidence", 0.0))
+        white_to_move: bool = bool(data.get("white_to_move", True))
+
+        if not fen:
+            logger.warning("Gemini returned empty FEN — board probably not visible.")
             return ChessVisionResult(
-                fen_string="",
-                is_valid_board=False,
-                confidence=0.0,
+                fen_string="", is_valid_board=False, confidence=confidence
             )
 
+        # Validate FEN with python-chess
         try:
-            import cv2
-            import numpy as np
             import chess
-            
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            # Find 7x7 inner corners of an 8x8 chessboard
-            ret, corners = cv2.findChessboardCorners(gray, (7, 7), None)
-            
-            if ret:
-                # Board found, warp to top-down view
-                # Simple approximation for 8x8 corners logic
-                # For a full 8x8 squares, we need the outer corners, but findChessboardCorners gives inner.
-                # Here we just extrapolate or use the bounding rect.
-                
-                # Using Gemini as cloud fallback due to complexity of reliable physical board extraction
-                pass
-                
-        except Exception as e:
-            logger.error(f"Error in OpenCV board detection: {e}")
+            board = chess.Board(fen)
+            is_valid = board.is_valid()
+            white_to_move = board.turn == chess.WHITE
+        except Exception:
+            is_valid = False
 
-        # Cloud fallback for FEN generation
-        try:
-            import cv2
-            from openai import OpenAI
-            api_key = os.getenv("GEMINI_API_KEY")
-            
-            if api_key:
-                client = OpenAI(
-                    api_key=api_key,
-                    base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
-                )
-                
-                _, buffer = cv2.imencode('.jpg', frame)
-                base64_image = base64.b64encode(buffer).decode('utf-8')
-                
-                response = client.chat.completions.create(
-                    model="gemini-1.5-flash",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": [
-                                {"type": "text", "text": "Analyze this chessboard and return ONLY a JSON object with 'fen' (the standard FEN string) and 'confidence' (float 0.0 to 1.0). Assume it is White's turn to move."},
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/jpeg;base64,{base64_image}"
-                                    },
-                                },
-                            ],
-                        }
-                    ],
-                )
-                
-                response_text = response.choices[0].message.content
-                import re
-                import chess
-                json_match = re.search(r'```json\n(.*?)\n```', response_text, re.DOTALL)
-                if json_match:
-                    data = json.loads(json_match.group(1))
-                else:
-                    data = json.loads(response_text)
-                    
-                fen = data.get("fen", "")
-                confidence = float(data.get("confidence", 0.9))
-                
-                board = chess.Board(fen)
-                return ChessVisionResult(
-                    fen_string=fen,
-                    is_valid_board=board.is_valid(),
-                    confidence=confidence,
-                    white_to_move=board.turn == chess.WHITE
-                )
-        except Exception as e:
-            logger.error(f"Error in Cloud Fallback for Chess: {e}")
-
-        return ChessVisionResult(
-            fen_string="",
-            is_valid_board=False,
-            confidence=0.0
+        logger.info(
+            f"Chess FEN extracted: '{fen}' | valid={is_valid} | conf={confidence:.2f}"
         )
+        return ChessVisionResult(
+            fen_string=fen,
+            is_valid_board=is_valid,
+            confidence=confidence,
+            white_to_move=white_to_move,
+        )
+

@@ -1069,49 +1069,38 @@ class LumiBrain:
         return result
 
     def _tool_describe_vision(self) -> str:
-        """Describes what the robot currently sees via GPT-4 Vision API."""
+        """Describes what the robot currently sees via Gemini Vision API."""
         frame = self.camera.get_frame()
         if frame is None:
             return "I cannot see anything right now. The camera is offline."
-        
-        import cv2
-        import base64
-        import urllib.request
-        import json
-        import os
-        
-        _, buffer = cv2.imencode('.jpg', frame)
-        b64_img = base64.b64encode(buffer).decode('utf-8')
-        
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            return "Vision API key is missing."
-        
-        payload = {
-            "model": "gpt-4o",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "Describe this image briefly in Bengali."},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}}
-                    ]
-                }
-            ],
-            "max_tokens": 150
-        }
-        
-        req = urllib.request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps(payload).encode('utf-8'), headers={
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        })
+
         try:
-            with urllib.request.urlopen(req, timeout=10) as response:
-                result = json.loads(response.read().decode())
-                return result["choices"][0]["message"]["content"]
+            import cv2
+            import io
+            import google.generativeai as genai  # type: ignore
+            import PIL.Image
+            import os
+
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                return "Vision API key is missing."
+
+            ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            if not ok:
+                return "Could not encode camera frame."
+            pil_image = PIL.Image.open(io.BytesIO(buf.tobytes()))
+
+            genai.configure(api_key=api_key)
+            model = genai.GenerativeModel("gemini-2.0-flash")
+            response = model.generate_content(
+                ["Describe this image briefly in Bengali (2-3 sentences).", pil_image],
+                generation_config=genai.GenerationConfig(temperature=0.4, max_output_tokens=200),
+            )
+            return response.text.strip()
         except Exception as e:
-            logger.error(f"Vision API error: {e}")
+            logger.error(f"Vision describe error: {e}")
             return "I'm having trouble understanding what I see right now."
+
 
     def _tool_analyze_plant(self) -> str:
         frame = self.camera.get_frame()
@@ -1119,11 +1108,22 @@ class LumiBrain:
         return self.plant_detector.generate_bangla_speech_summary(self.plant_detector.analyze_leaf(frame))
 
     def _tool_analyze_chess(self) -> str:
+        """Analyse the chessboard seen by the camera using Gemini Vision + Stockfish."""
         frame = self.camera.get_frame()
-        if frame is None: return "Camera offline."
+        if frame is None:
+            return "ক্যামেরা অফলাইন আছে।"
+
         chess_res = self.chess_vision.extract_fen_from_frame(frame)
+
+        if not chess_res.fen_string or not chess_res.is_valid_board:
+            return (
+                "ক্যামেরায় কোনো দাবার বোর্ড স্পষ্টভাবে দেখা যাচ্ছে না। "
+                "দয়া করে বোর্ডটি ক্যামেরার সামনে সরাসরি রাখুন।"
+            )
+
         eval_res = self.chess_engine.analyze_position(chess_res.fen_string)
         return eval_res.explanation_bn
+
 
     def _tool_control_body(self, part: str, action: str, angle_deg: Optional[float] = None) -> str:
         """Direct, expressive motion execution based on user voice requests."""
