@@ -98,10 +98,95 @@ def reset_memory(keep_backup: bool = True) -> None:
                 pass
         print("  ✓ Cleaned temporary diagnostic reports")
 
+    # Reset Mem0 Cloud memories
+    reset_mem0_cloud()
+
     print("=" * 60)
-    print("✨ SUCCESS: LUMI's memory and face data have been completely reset!")
+    print("✨ SUCCESS: LUMI's local and cloud memories have been completely reset!")
     print("LUMI is now fresh, clean, and ready to learn anew.")
     print("=" * 60)
+
+
+def reset_mem0_cloud() -> None:
+    """Wipe all memories and users stored in Mem0 Cloud API (api.mem0.ai)."""
+    import json
+    import urllib.request
+    import urllib.error
+
+    api_key = os.environ.get("MEM0_API_KEY")
+    if not api_key:
+        env_file = PROJECT_ROOT / ".env"
+        if env_file.exists():
+            with open(env_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("MEM0_API_KEY="):
+                        api_key = line.split("=", 1)[1].strip().strip('"').strip("'")
+                        break
+
+    if not api_key:
+        print("\n☁️ MEM0_API_KEY not found in environment or .env — skipping Mem0 Cloud wipe.")
+        print("  (If you use Mem0 Cloud, ensure MEM0_API_KEY is set in ~/Antigravity/.env on the Pi)")
+        return
+
+    print("\n☁️ Connecting to Mem0 Cloud API (api.mem0.ai) to wipe cloud memories...")
+    headers = {
+        "Authorization": f"Token {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # 1. Delete all memories
+    try:
+        mem_url = "https://api.mem0.ai/v1/memories/"
+        req = urllib.request.Request(mem_url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=10) as response:
+            data = json.loads(response.read().decode())
+
+        memories = data if isinstance(data, list) else data.get("results", [])
+        if memories:
+            print(f"  Found {len(memories)} memories in Mem0 Cloud. Deleting...")
+            del_count = 0
+            for m in memories:
+                mid = m.get("id")
+                if not mid:
+                    continue
+                del_req = urllib.request.Request(f"{mem_url}{mid}/", headers=headers, method="DELETE")
+                try:
+                    with urllib.request.urlopen(del_req, timeout=10):
+                        del_count += 1
+                except Exception as e:
+                    print(f"  ⚠️ Could not delete memory {mid}: {e}")
+            print(f"  ✓ Deleted {del_count}/{len(memories)} memories from Mem0 Cloud.")
+        else:
+            print("  ✓ No memories found in Mem0 Cloud.")
+    except Exception as e:
+        print(f"  ⚠️ Error wiping Mem0 Cloud memories: {e}")
+
+    # 2. Delete all users from Mem0 Cloud
+    try:
+        users_url = "https://api.mem0.ai/v1/users/"
+        req = urllib.request.Request(users_url, headers=headers, method="GET")
+        with urllib.request.urlopen(req, timeout=10) as response:
+            users_data = json.loads(response.read().decode())
+
+        users = users_data if isinstance(users_data, list) else users_data.get("results", [])
+        if users:
+            print(f"  Found {len(users)} users in Mem0 Cloud. Deleting...")
+            del_user_count = 0
+            for u in users:
+                uid = u.get("id") or u.get("user_id")
+                if not uid:
+                    continue
+                del_req = urllib.request.Request(f"{users_url}{uid}/", headers=headers, method="DELETE")
+                try:
+                    with urllib.request.urlopen(del_req, timeout=10):
+                        del_user_count += 1
+                except Exception as e:
+                    print(f"  ⚠️ Could not delete user {uid}: {e}")
+            print(f"  ✓ Deleted {del_user_count}/{len(users)} users from Mem0 Cloud.")
+    except Exception as e:
+        # Some accounts may not support users endpoint or it might be empty
+        pass
 
 
 if __name__ == "__main__":
