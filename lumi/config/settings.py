@@ -24,7 +24,7 @@ class AppConfig:
     data_dir: str = "data"
     primary_language: str = "bn"
     fallback_language: str = "en"
-    owner_name: str = "Palash"
+    owner_name: str = "Mizan"
 
 
 @dataclass
@@ -174,7 +174,7 @@ def load_settings(
         data_dir=env_data_dir,
         primary_language=app_data.get("primary_language", "bn"),
         fallback_language=app_data.get("fallback_language", "en"),
-        owner_name=app_data.get("owner_name", "Palash"),
+        owner_name=app_data.get("owner_name", "Mizan"),
     )
 
     mem_cfg = MemoryConfig(

@@ -9,7 +9,7 @@ def test_default_settings_load() -> None:
     settings = load_settings()
     assert isinstance(settings, LumiSettings)
     assert settings.app.name == "LUMI"
-    assert settings.app.owner_name == "Palash"
+    assert settings.app.owner_name == "Mizan"
     assert settings.memory.wal_mode is True
     assert settings.display.width == 240
     assert settings.display.height == 240

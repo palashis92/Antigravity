@@ -364,6 +364,122 @@ def test_proactive_recall_identity_query() -> None:
     assert "owner" in injected
 
 
+def test_owner_mizan_and_person_specific_memory_isolation() -> None:
+    """Verify LUMI recognizes Mizan as owner and isolates memories between people."""
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mizan = mem.remember_person("Mizan", relationship="owner", notes="Owner and primary user.")
+    rahul = mem.remember_person("Rahul", relationship="friend", notes="Friend from college.")
+
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.memory = mem
+    brain.settings = MagicMock()
+    brain.settings.app.owner_name = "Mizan"
+    brain.active_person = None
+    brain.mem0 = MagicMock()
+    brain.mem0.remember_fact_sync.return_value = True
+    brain.mem0.recall_facts_sync.return_value = ""
+
+    # Verify get_owner returns Mizan
+    assert brain.get_owner().name == "Mizan"
+    assert brain.get_owner().id == mizan.id
+
+    # 1. Memorize fact for Mizan (default when active_person is None)
+    res_mizan = brain._tool_memorize_fact("Loves espresso and robotics")
+    assert "memorized successfully for Mizan" in res_mizan
+
+    # 2. Memorize fact specifically for Rahul
+    res_rahul = brain._tool_memorize_fact("Prefers green tea and plays guitar", person_name="Rahul")
+    assert "memorized successfully for Rahul" in res_rahul
+
+    # 3. Verify Rahul's memory doesn't leak into Mizan's facts
+    mizan_facts = mem.recall_facts(person_id=mizan.id)
+    assert len(mizan_facts) == 1
+    assert "espresso" in mizan_facts[0].fact_text
+    assert "tea" not in mizan_facts[0].fact_text
+
+    # 4. Verify Mizan's memory doesn't leak into Rahul's facts
+    rahul_facts = mem.recall_facts(person_id=rahul.id)
+    assert len(rahul_facts) == 1
+    assert "green tea" in rahul_facts[0].fact_text
+    assert "espresso" not in rahul_facts[0].fact_text
+
+    # 5. Recall specifically for Rahul
+    recall_rahul = brain._tool_recall_facts("tea", person_name="Rahul")
+    assert "Rahul" in recall_rahul
+    assert "green tea" in recall_rahul
+    assert "espresso" not in recall_rahul
+
+
+def test_silence_command_and_audio_suppression() -> None:
+    """Verify silence command ('চুপ থাকো, তুমি ১০ মিনিট চুপ থাকো') activates silence and drops audio."""
+    from lumi.ai.gemini_live import GeminiLiveClient
+
+    engine = GeminiLiveClient.__new__(GeminiLiveClient)
+    engine._silent_until = 0.0
+    engine.speaker = MagicMock()
+    engine.eyes = MagicMock()
+
+    assert engine.is_silent() is False
+
+    # Simulate user saying "তুমি ১০ মিনিট চুপ থাকো"
+    cmd_handled = engine._check_silence_command("তুমি ১০ মিনিট চুপ থাকো")
+    assert cmd_handled is True
+    assert engine.is_silent() is True
+    assert engine.speaker.stop_stream.called
+    assert engine.eyes.set_expression.call_args[0][0] == "sleep"
+
+    # Verify duration is ~600 seconds (10 mins)
+    remaining = engine._silent_until - time.time()
+    assert 550 < remaining <= 605
+
+    # Wake-up command cancels silence
+    wake_handled = engine._check_silence_command("লুমি কথা বলো")
+    assert wake_handled is True
+    assert engine.is_silent() is False
+    assert engine.eyes.set_expression.call_args[0][0] == "happy"
+
+
+def test_conversation_context_retention_in_setup() -> None:
+    """Verify Gemini Live setup prompt contains recent conversation history from MemoryManager."""
+    from lumi.ai.gemini_live import GeminiLiveClient
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mizan = mem.remember_person("Mizan", relationship="owner", notes="Owner of LUMI.")
+
+    mem.record_turn("user", "আমি আগামীকাল সিলেট যাচ্ছি", person_id=mizan.id)
+    mem.record_turn("lumi", "দারুণ! সিলেটের চা বাগান খুব সুন্দর!", person_id=mizan.id)
+
+    engine = GeminiLiveClient.__new__(GeminiLiveClient)
+    engine.memory = mem
+    engine.model = "models/gemini-3.1-flash-live-preview"
+    engine.tools = None
+
+    import asyncio
+    import json
+    sent_payloads = []
+
+    class MockWS:
+        async def send(self, data):
+            sent_payloads.append(json.loads(data))
+
+    asyncio.run(engine._send_setup(MockWS()))
+    assert len(sent_payloads) == 1
+    sys_instruction = sent_payloads[0]["setup"]["systemInstruction"]["parts"][0]["text"]
+
+    # Verify conversation transcript was injected
+    assert "RECENT CONVERSATION TRANSCRIPT" in sys_instruction
+    assert "আমি আগামীকাল সিলেট যাচ্ছি" in sys_instruction
+    assert "দারুণ! সিলেটের চা বাগান খুব সুন্দর!" in sys_instruction
+
+
 if __name__ == "__main__":
     test_servo_auto_relax_lifecycle()
     print("✓ test_servo_auto_relax_lifecycle PASSED")
@@ -387,4 +503,10 @@ if __name__ == "__main__":
     print("✓ test_spatial_audio_clean_downmix PASSED")
     test_proactive_recall_identity_query()
     print("✓ test_proactive_recall_identity_query PASSED")
+    test_owner_mizan_and_person_specific_memory_isolation()
+    print("✓ test_owner_mizan_and_person_specific_memory_isolation PASSED")
+    test_silence_command_and_audio_suppression()
+    print("✓ test_silence_command_and_audio_suppression PASSED")
+    test_conversation_context_retention_in_setup()
+    print("✓ test_conversation_context_retention_in_setup PASSED")
     print("All improvement tests passed successfully!")

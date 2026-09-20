@@ -296,7 +296,7 @@ def main() -> None:
         doc_path = app.brain.documents.generate_summary_pdf(
             title="LUMI Daily Briefing & Health Report",
             content_sections={
-                "Personal Memory Status": "Owner: Palash (Active)\nInteraction Count: 12\nConsent: Granted",
+                "Personal Memory Status": f"Owner: {app.settings.app.owner_name} (Active)\nInteraction Count: 12\nConsent: Granted",
                 "Agricultural Advisory": plant_summary,
                 "Chess Summary": chess_summary,
             },

@@ -120,6 +120,9 @@ def main():
         ("test_tool_memorize_and_recall_palash_identity", timp.test_tool_memorize_and_recall_palash_identity, ()),
         ("test_spatial_audio_clean_downmix", timp.test_spatial_audio_clean_downmix, ()),
         ("test_proactive_recall_identity_query", timp.test_proactive_recall_identity_query, ()),
+        ("test_owner_mizan_and_person_specific_memory_isolation", timp.test_owner_mizan_and_person_specific_memory_isolation, ()),
+        ("test_silence_command_and_audio_suppression", timp.test_silence_command_and_audio_suppression, ()),
+        ("test_conversation_context_retention_in_setup", timp.test_conversation_context_retention_in_setup, ()),
     ]
 
     for name, fn, args in tests_to_run:

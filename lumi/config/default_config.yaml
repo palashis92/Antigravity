@@ -7,7 +7,7 @@ app:
   data_dir: "data"
   primary_language: "bn"
   fallback_language: "en"
-  owner_name: ""
+  owner_name: "Mizan"
 
 memory:
   db_path: "data/lumi.db"

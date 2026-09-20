@@ -71,6 +71,64 @@ class GeminiLiveClient:
         
         self._last_video_send = 0.0
         self._last_speech_motion_time = 0.0
+        self._silent_until = 0.0
+
+    def set_silent_until(self, timestamp: float) -> None:
+        """Enforce silence until the given Unix timestamp."""
+        self._silent_until = timestamp
+        if hasattr(self, "speaker") and self.speaker:
+            try:
+                self.speaker.stop_stream()
+            except Exception:
+                pass
+
+    def is_silent(self) -> bool:
+        """Return True if robot is currently silenced by user command."""
+        return time.time() < getattr(self, "_silent_until", 0.0)
+
+    def _check_silence_command(self, text: str) -> bool:
+        """Detect silence commands (e.g. 'চুপ থাকো', '১০ মিনিট চুপ থাকো', 'shut up') or wake commands."""
+        import re
+        lower = text.lower()
+
+        # Wake command: "কথা বলো", "জেগে ওঠো", "wake up"
+        if re.search(r"(?:কথা বল(?:ো|িস|েন)?|জেগে ওঠো|শুনতে পাচ্ছ|wake up)", lower):
+            if self.is_silent():
+                logger.info("Wake command detected. Deactivating silent mode.")
+                self._silent_until = 0.0
+                if self.eyes and hasattr(self.eyes, "set_expression"):
+                    self.eyes.set_expression("happy")
+                return True
+
+        # Silence command: "চুপ থাকো", "১০ মিনিট চুপ থাকো", "কথা বলিও না", "shut up", "be quiet"
+        has_silence_word = any(w in lower for w in ["চুপ", "থাম", "কথা বল", "shut up", "be quiet", "silence", "quiet"])
+        if has_silence_word and re.search(r"(?:চুপ থাক|চুপ কর|থাম|কথা বল(?:ো|িস|েন)?\s*না|shut up|be quiet)", lower):
+            duration_minutes = 5.0
+            num_match = re.search(r"(\d+)\s*(?:মিনিট|min)", lower)
+            if num_match:
+                try:
+                    duration_minutes = float(num_match.group(1))
+                except ValueError:
+                    duration_minutes = 5.0
+            elif "দশ" in lower:
+                duration_minutes = 10.0
+            elif "পাঁচ" in lower:
+                duration_minutes = 5.0
+            elif "এক" in lower:
+                duration_minutes = 1.0
+
+            duration_s = max(duration_minutes * 60.0, 30.0)
+            self._silent_until = time.time() + duration_s
+            logger.info(f"Silence command matched from user speech! Silencing LUMI for {duration_s:.0f}s.")
+            if self.speaker:
+                try:
+                    self.speaker.stop_stream()
+                except Exception:
+                    pass
+            if self.eyes and hasattr(self.eyes, "set_expression"):
+                self.eyes.set_expression("sleep")
+            return True
+        return False
 
     def start(self) -> None:
         if self._running: return
@@ -174,6 +232,24 @@ class GeminiLiveClient:
                 instructions += f"\n\n[USER DIRECTIVES & LEARNED RULES]:\nThe user has previously taught you the following behavioral rules and preferences which you MUST ALWAYS obey:\n{rules_prompt}"
         except Exception as e:
             logger.debug(f"Could not append learned rules to setup prompt: {e}")
+
+        # Inject recent conversation turns so LUMI never forgets context across turns/reconnects
+        try:
+            if self.memory and hasattr(self.memory, "get_recent_turns"):
+                recent_turns = self.memory.get_recent_turns(limit=8)
+                if recent_turns:
+                    dialogue_lines = []
+                    for t in recent_turns:
+                        speaker_label = "User" if t.speaker == "user" else "Lumi"
+                        dialogue_lines.append(f"{speaker_label}: {t.text}")
+                    if dialogue_lines:
+                        instructions += (
+                            "\n\n[RECENT CONVERSATION TRANSCRIPT (DO NOT FORGET THIS CONTEXT)]:\n"
+                            + "\n".join(dialogue_lines)
+                            + "\n(INSTRUCTION: The above is the recent conversation history with the user. Seamlessly continue the conversation from this context. Do not ask who they are or forget what was just discussed.)"
+                        )
+        except Exception as e:
+            logger.debug(f"Could not append recent conversation history to setup prompt: {e}")
         
         setup_msg: Dict[str, Any] = {
             "setup": {
@@ -251,6 +327,10 @@ class GeminiLiveClient:
         if not self._loop or not self._loop.is_running():
             return
             
+        # Silent mode: Drop mic chunks completely
+        if self.is_silent():
+            return
+
         # Software AEC (Echo Prevention): Drop mic chunks completely while speaker is playing
         if time.time() < getattr(self, "_speaker_active_until", 0):
             return
@@ -267,6 +347,11 @@ class GeminiLiveClient:
         _debug_chunk_count = 0
         try:
             while self._running:
+                # If silenced by user, do not send audio
+                if self.is_silent():
+                    await asyncio.sleep(0.05)
+                    continue
+
                 try:
                     chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=0.1)
                 except asyncio.TimeoutError:
@@ -347,6 +432,9 @@ class GeminiLiveClient:
                             model_turn = data["serverContent"].get("modelTurn", {})
                             for part in model_turn.get("parts", []):
                                 if "inlineData" in part:
+                                    if self.is_silent():
+                                        logger.debug("Suppressing Gemini Live audio output: silent mode active.")
+                                        continue
                                     audio_bytes = base64.b64decode(part["inlineData"]["data"])
                                     self._last_active_time = time.time()
                                     
@@ -377,7 +465,8 @@ class GeminiLiveClient:
                                 elif "text" in part:
                                     txt = part["text"]
                                     print(f"🤖 [LUMI (Live)]: {txt}")
-                                    lumi_buffer.append(txt)
+                                    if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
+                                        lumi_buffer.append(txt)
                                 
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
@@ -396,15 +485,25 @@ class GeminiLiveClient:
                         if "inputAudioTranscription" in content:
                             txt = _get_text(content['inputAudioTranscription'])
                             print(f"🗣️  [USER]: {txt}")
-                            if txt: user_buffer.append(txt)
+                            if txt:
+                                user_buffer.append(txt)
+                                self._check_silence_command(txt)
                         if "outputAudioTranscription" in content:
-                            print(f"🤖 [LUMI (Draft)]: {_get_text(content['outputAudioTranscription'])}")
+                            txt = _get_text(content['outputAudioTranscription'])
+                            print(f"🤖 [LUMI (Draft)]: {txt}")
+                            if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
+                                lumi_buffer.append(txt)
                         if "inputTranscription" in content:
                             txt = _get_text(content['inputTranscription'])
                             print(f"🗣️  [USER]: {txt}")
-                            if txt: user_buffer.append(txt)
+                            if txt:
+                                user_buffer.append(txt)
+                                self._check_silence_command(txt)
                         if "outputTranscription" in content:
-                            print(f"🤖 [LUMI (Draft)]: {_get_text(content['outputTranscription'])}")
+                            txt = _get_text(content['outputTranscription'])
+                            print(f"🤖 [LUMI (Draft)]: {txt}")
+                            if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
+                                lumi_buffer.append(txt)
 
                         # End of turn detection
                         if content.get("turnComplete"):
@@ -433,6 +532,9 @@ class GeminiLiveClient:
                                         asyncio.to_thread(tool_func, **args),
                                         timeout=12.0
                                     )
+                                    if name == "set_silent_mode":
+                                        dur = args.get("duration_seconds", 300.0) or 300.0
+                                        self.set_silent_until(time.time() + float(dur))
                                 except asyncio.TimeoutError:
                                     logger.error(f"Tool '{name}' execution timed out after 12.0s.")
                                     result = f"Error: Tool '{name}' execution timed out."
@@ -511,3 +613,7 @@ class GeminiLiveClient:
 
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(_send_when_ready(), self._loop)
+
+
+# Alias for backwards compatibility
+GeminiLiveEngine = GeminiLiveClient

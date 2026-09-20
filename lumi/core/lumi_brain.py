@@ -118,7 +118,7 @@ class LumiBrain:
             "type": "object", 
             "properties": {
                 "name": {"type": "string", "description": "The person's full name."},
-                "relationship": {"type": "string", "description": "Their relationship to Palash (the owner), e.g. friend, brother, guest."},
+                "relationship": {"type": "string", "description": "Their relationship to the owner, e.g. friend, brother, guest."},
                 "age": {"type": "integer", "description": "The person's age if mentioned (e.g. 25)."},
                 "notes": {"type": "string", "description": "Any short important facts or details to remember about them."}
             }, 
@@ -206,7 +206,7 @@ class LumiBrain:
             "required": ["recipient"]
         })
         self.tools.register("memorize_fact", self._tool_memorize_fact, "Save a specific fact or detail about a person or event to long-term memory. Do this autonomously whenever you learn something important (e.g. user's hobbies, current tasks, preferences).", {
-            "type": "object", "properties": {"fact": {"type": "string", "description": "The fact to remember (e.g. 'Palash likes black coffee')."}, "person_name": {"type": "string", "description": "Optional name of the person this fact is about."}}, "required": ["fact"]
+            "type": "object", "properties": {"fact": {"type": "string", "description": "The fact to remember (e.g. 'Mizan likes black coffee')."}, "person_name": {"type": "string", "description": "Optional name of the person this fact is about."}}, "required": ["fact"]
         })
         self.tools.register("recall_facts", self._tool_recall_facts, "Retrieve past facts from long-term memory about a person or topic. PROACTIVELY call this whenever the user brings up a new topic, a person's name, or an ongoing project to check if you have context, even if the user didn't explicitly ask you to remember. Integrate the results naturally.", {
             "type": "object", "properties": {"search_query": {"type": "string", "description": "Keywords to search for."}, "person_name": {"type": "string", "description": "Optional name of the person."}}, "required": ["search_query"]
@@ -352,14 +352,26 @@ class LumiBrain:
         self.event_bus.subscribe("motion.idle_wander", self._on_idle_wander)
         self.event_bus.subscribe("conversation.turn_complete", self._on_turn_complete)
 
+    def get_owner(self) -> Any:
+        """Find the designated owner of LUMI (by relationship='owner' or configured owner_name)."""
+        try:
+            for p in self.memory.list_people():
+                if p.relationship and p.relationship.lower() == "owner":
+                    return p
+        except Exception:
+            pass
+        owner_name = getattr(getattr(getattr(self, "settings", None), "app", None), "owner_name", "Mizan")
+        owner = self.memory.find_person_by_name(owner_name)
+        if owner:
+            return owner
+        people = self.memory.list_people()
+        return people[0] if people else None
+
     def _on_turn_complete(self, event: Event) -> None:
         person = self.active_person
         if not person:
-            # Default to owner/creator Palash, or the primary registered person
-            person = self.memory.find_person_by_name("Palash")
-            if not person:
-                people = self.memory.list_people()
-                person = people[0] if people else None
+            # Default to owner (Mizan), or the primary registered person
+            person = self.get_owner()
 
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
@@ -544,6 +556,11 @@ class LumiBrain:
         self.vad.set_on_overlap_detected(self._on_overlap_detected)
         
         while self._running:
+            # If silent mode is active, do not stream mic audio to Gemini Live or trigger speech
+            if self._is_silent():
+                time.sleep(0.05)
+                continue
+
             chunk = self.mic.read_chunk(1024)
             if not chunk:
                 time.sleep(0.01)
@@ -995,7 +1012,7 @@ class LumiBrain:
                     f"Recent memories: {fact_str}. {unread_msgs}\n"
                     f"INSTRUCTION: Greet {person.name} immediately, warmly, and naturally in conversational Bengali (বাংলা). "
                     "Do not mention reading notes or memories mechanically. "
-                    "CRITICAL RULE: Do NOT ask if they have a message for Palash unless they explicitly ask for him. "
+                    "CRITICAL RULE: Do NOT ask if they have a message for the owner unless they explicitly ask for them. "
                     "Focus on greeting them naturally as a familiar friend! Do not repeat previous greetings or phrases."
                 )
                 
@@ -1004,6 +1021,8 @@ class LumiBrain:
                     self.realtime_voice.inject_context(prompt, trigger_response=True)
                 elif hasattr(self, "tts") and hasattr(self, "speaker"):
                     import random
+                    owner_obj = self.get_owner()
+                    owner_first = owner_obj.name.lower() if owner_obj else "mizan"
                     if is_first_today:
                         if 5 <= hour < 12:
                             time_greeting = f"শুভ সকাল {person.name}! কেমন আছেন?"
@@ -1022,7 +1041,7 @@ class LumiBrain:
                         local_greetings = [
                             f"আরে {person.name}! আবার দেখা হলো! সব ঠিকঠাক?",
                             f"এই যে {person.name}! কোনো সাহায্য লাগবে?",
-                            f"পলাশ ভাই, আবার আসলেন? কোনো দরকার?" if "palash" in person.name.lower() else f"আরে {person.name}! সব কেমন চলছে?"
+                            f"{person.name} ভাই, আবার আসলেন? কোনো দরকার?" if owner_first in person.name.lower() else f"আরে {person.name}! সব কেমন চলছে?"
                         ]
                     greeting_text = random.choice(local_greetings)
                     audio_path = self.tts.synthesize(greeting_text)
@@ -1063,7 +1082,7 @@ class LumiBrain:
                         "INSTRUCTION: Greet them immediately, warmly, and with friendly curiosity in Bengali (বাংলা).\n"
                         "- First introduce yourself as LUMI ('আমি লুমি').\n"
                         "- Ask for their name with friendly interest ('তোমাকে তো আগে দেখিনি! তোমার নাম কী?' বা 'পরিচয়টা দাও তো!').\n"
-                        "- CRITICAL RULE: Do NOT ask if they have a message for Palash right now, and do NOT say 'পলাশ নেই' on first contact. First introduce yourself, make friends, and ask their name! Only mention Palash later in conversation if they ask for him.\n"
+                        "- CRITICAL RULE: Do NOT ask if they have a message for the owner right now, and do NOT say 'তিনি নেই' on first contact. First introduce yourself, make friends, and ask their name! Only mention the owner later in conversation if they ask for them.\n"
                         "- When they tell you their name, you can remember them with the 'memorize_person' tool.\n"
                         "- Do NOT repeat the exact same sentence if you just said it. Keep it natural and fresh!"
                     ),
@@ -1072,14 +1091,14 @@ class LumiBrain:
                         "INSTRUCTION: Greet them with cheerful surprise in Bengali (বাংলা).\n"
                         "- Say something lively like: 'আরে, নতুন একজন বন্ধু এসেছে! আমি লুমি, তোমার নাম কী বলো তো?'\n"
                         "- Focus completely on introducing yourself and getting to know them.\n"
-                        "- Do NOT ask if they have a message for Palash on first meeting.\n"
+                        "- Do NOT ask if they have a message for the owner on first meeting.\n"
                         "- Be friendly, sweet, and invite them to chat!"
                     ),
                     (
                         "[VISUAL EVENT: You see a new face in front of your camera!]\n"
                         "INSTRUCTION: Greet them warmly and politely in conversational Bengali (বাংলা).\n"
                         "- Say: 'হ্যালো! তোমাকে তো আগে দেখিনি। আমি লুমি! তোমার পরিচয়টা কী জানতে পারি?'\n"
-                        "- Let the conversation flow naturally. Do NOT mention Palash right away.\n"
+                        "- Let the conversation flow naturally. Do NOT mention the owner right away.\n"
                         "- Keep your response short, sweet, and human-like."
                     ),
                 ]
@@ -1193,9 +1212,9 @@ class LumiBrain:
         if person_name:
             person = self.memory.find_person_by_name(person_name)
         
-        # Fallback to active person or owner Palash
+        # Fallback to active person or owner
         if not person:
-            person = getattr(self, "active_person", None) or self.memory.find_person_by_name("Palash")
+            person = getattr(self, "active_person", None) or self.get_owner()
             if not person:
                 people = self.memory.list_people()
                 person = people[0] if people else None
@@ -1229,7 +1248,7 @@ class LumiBrain:
         # If no specific person requested, default to the person we're talking to (or owner)
         if not person_id:
             active = getattr(self, "active_person", None)
-            fallback = self.memory.find_person_by_name("Palash")
+            fallback = self.get_owner()
             person = active or fallback
             if person:
                 person_id = person.id
@@ -1310,8 +1329,9 @@ class LumiBrain:
         if not unique_results:
             return f"No relevant facts found in memory for {person.name if person else 'this person'}."
             
-        result = f"Memories retrieved about {person.name if person else 'User'}:\n" + "\n".join(unique_results)
-        result += f"\n(CRITICAL INSTRUCTION: You are currently talking to {person.name if person else 'the User'}. The above memories are facts about them. If the memory says 'Palash did X and Fuad did Y', and the user is Palash, you must understand that the USER did X, and their friend/colleague Fuad did Y. Do not get confused about who is who.)"
+        target_name = person.name if person else (getattr(self.get_owner(), "name", "the User"))
+        result = f"Memories retrieved about {target_name}:\n" + "\n".join(unique_results)
+        result += f"\n(CRITICAL INSTRUCTION: You are currently talking to {target_name}. The above memories are facts about them. If the memories mention other people, understand who is who and do not mix them up.)"
         
         return result
 
@@ -1362,21 +1382,41 @@ class LumiBrain:
             try:
                 dt = datetime.fromisoformat(silent_until_iso)
                 self._silent_until = dt.timestamp()
-                remaining = max(0, self._silent_until - now)
-                logger.info(f"Silent mode activated until {silent_until_iso} ({remaining:.0f}s from now).")
-                return f"silent_mode_active_until:{silent_until_iso}"
             except Exception as e:
                 logger.warning(f"set_silent_mode: bad ISO string '{silent_until_iso}': {e}")
-
-        if duration_seconds and duration_seconds > 0:
+                self._silent_until = now + 300.0
+        elif duration_seconds and duration_seconds > 0:
             self._silent_until = now + duration_seconds
-            logger.info(f"Silent mode activated for {duration_seconds:.0f}s.")
-            return f"silent_mode_active_for:{duration_seconds:.0f}s"
+        else:
+            # Default: 5 minutes
+            self._silent_until = now + 300.0
 
-        # Default: 5 minutes
-        self._silent_until = now + 300.0
-        logger.info("Silent mode activated for 5 minutes (default).")
-        return "silent_mode_active_for:300s"
+        # Immediately stop speech output and silence audio hardware
+        if hasattr(self, "speaker") and self.speaker:
+            try:
+                self.speaker.stop_stream()
+            except Exception:
+                pass
+        if hasattr(self, "eyes") and self.eyes:
+            try:
+                self.eyes.set_expression("sleep")
+            except Exception:
+                pass
+        if hasattr(self, "gestures") and self.gestures:
+            try:
+                self.gestures.stop()
+            except Exception:
+                pass
+        if hasattr(self, "realtime_voice") and self.realtime_voice:
+            try:
+                if hasattr(self.realtime_voice, "set_silent_until"):
+                    self.realtime_voice.set_silent_until(self._silent_until)
+            except Exception:
+                pass
+
+        remaining = max(0, self._silent_until - now)
+        logger.info(f"Silent mode activated for {remaining:.0f}s (until {self._silent_until}).")
+        return f"silent_mode_active_for:{remaining:.0f}s"
 
     def _tool_adapt_behavior(self, user_feedback: str, adapted_rule: str, category: str = "general") -> str:
         """Analyze, store, and dynamically adapt to behavioral instructions and advice from the user."""

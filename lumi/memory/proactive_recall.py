@@ -154,14 +154,27 @@ class ProactiveRecallEngine:
                     re.IGNORECASE
                 ))
                 if is_identity_query:
-                    owner = self.memory.find_person_by_name("Palash")
+                    owner = None
+                    try:
+                        for p in self.memory.list_people():
+                            if p.relationship and p.relationship.lower() == "owner":
+                                owner = p
+                                break
+                    except Exception:
+                        pass
+                    if not owner:
+                        owner = self.memory.find_person_by_name("Mizan")
+                    if not owner:
+                        people = self.memory.list_people()
+                        owner = people[0] if people else None
+
                     if owner:
                         if not any(p.id == owner.id for p in mentioned_people):
                             mentioned_people.append(owner)
                         from ..memory.models import Fact
                         owner_profile_fact = Fact(
                             id=f"profile_{owner.id}",
-                            fact_text=f"The user speaking to you is {owner.name} ({owner.relationship}). Notes: {owner.notes or 'Owner and creator of LUMI'}.",
+                            fact_text=f"The user speaking to you is {owner.name} ({owner.relationship}). Notes: {owner.notes or 'Owner of LUMI'}.",
                             category="identity"
                         )
                         owner_profile_fact._mentioned_person = owner.name
