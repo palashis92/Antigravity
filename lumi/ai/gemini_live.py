@@ -165,6 +165,15 @@ class GeminiLiveClient:
         import datetime
         now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         instructions = LUMI_SYSTEM_PROMPT_BN + f"\n\n[SYSTEM: The current date and time is {now_str}. Use this for all relative time calculations, especially when creating reminders in ISO 8601 format.]"
+
+        try:
+            from ..memory.learned_rules import LearnedRulesStore
+            rules_store = LearnedRulesStore()
+            rules_prompt = rules_store.get_rules_prompt()
+            if rules_prompt:
+                instructions += f"\n\n[USER DIRECTIVES & LEARNED RULES]:\nThe user has previously taught you the following behavioral rules and preferences which you MUST ALWAYS obey:\n{rules_prompt}"
+        except Exception as e:
+            logger.debug(f"Could not append learned rules to setup prompt: {e}")
         
         setup_msg: Dict[str, Any] = {
             "setup": {

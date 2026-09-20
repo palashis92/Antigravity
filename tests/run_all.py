@@ -108,11 +108,14 @@ def main():
         ("test_speaker_identifier_lifecycle", taud.test_speaker_identifier_lifecycle, ()),
         ("test_speaker_identifier_cosine_similarity", taud.test_speaker_identifier_cosine_similarity, ()),
         ("test_doa_body_orientation_mapping", taud.test_doa_body_orientation_mapping, ()),
-        # LUMI System Improvements (Auto-Relax, Speaker Stop, Barge-In, Async Tools)
+        # LUMI System Improvements (Auto-Relax, Speaker Stop, Software AEC, Async Tools)
         ("test_servo_auto_relax_lifecycle", timp.test_servo_auto_relax_lifecycle, ()),
         ("test_speaker_interface_stop_stream_and_shutdown", timp.test_speaker_interface_stop_stream_and_shutdown, ()),
         ("test_gemini_live_software_aec", timp.test_gemini_live_software_aec, ()),
         ("test_gemini_live_async_tool_execution", timp.test_gemini_live_async_tool_execution, ()),
+        ("test_learned_rules_store_and_adaptation", timp.test_learned_rules_store_and_adaptation, ()),
+        ("test_camera_backend_close_and_face_service_cache", timp.test_camera_backend_close_and_face_service_cache, ()),
+        ("test_greeting_cooldown_and_temporal_context", timp.test_greeting_cooldown_and_temporal_context, ()),
     ]
 
     for name, fn, args in tests_to_run:

@@ -150,6 +150,89 @@ def test_gemini_live_async_tool_execution() -> None:
     asyncio.run(run_checks())
 
 
+def test_learned_rules_store_and_adaptation() -> None:
+    """Verify LearnedRulesStore persistence, prompt generation, and rule lifecycle."""
+    import tempfile
+    from lumi.memory.learned_rules import LearnedRulesStore
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        store_path = Path(tmpdir) / "test_rules.json"
+        store = LearnedRulesStore(store_path)
+
+        # 1. Initially empty
+        assert store.load_rules() == []
+        assert store.get_rules_prompt() == ""
+
+        # 2. Add rule
+        rule1 = store.add_rule(
+            feedback="কথা বলার সময় হাত বেশি নাড়িয়ে কথা বলবে না",
+            adapted_rule="কথা বলার সময় হাত বেশি নাড়িয়ে কথা বলবে না, স্বাভাবিক অঙ্গভঙ্গি করবে।",
+            category="gesture"
+        )
+        assert rule1["id"].startswith("rule_")
+        assert rule1["category"] == "gesture"
+
+        # 3. Verify loaded from disk
+        rules = store.load_rules()
+        assert len(rules) == 1
+        assert rules[0]["user_feedback"] == "কথা বলার সময় হাত বেশি নাড়িয়ে কথা বলবে না"
+
+        # 4. Verify formatted prompt
+        prompt = store.get_rules_prompt()
+        assert "[GESTURE]" in prompt
+        assert "স্বাভাবিক অঙ্গভঙ্গি করবে" in prompt
+
+        # 5. Delete rule
+        assert store.delete_rule(rule1["id"])
+        assert len(store.load_rules()) == 0
+
+
+def test_camera_backend_close_and_face_service_cache() -> None:
+    """Verify PiCameraBackend closes cleanly and FaceRecognitionService caches confirmed faces."""
+    from lumi.vision.camera import PiCameraBackend
+    from lumi.vision.face import DetectedFace, FaceRecognitionService, IdentityState
+
+    backend = PiCameraBackend(width=640, height=480)
+    # Even if Picamera2 is not installed on testing host, stop() must cleanly execute close() and del
+    backend.stop()
+    assert backend._picam is None
+    assert not backend.is_available()
+
+    # Verify FaceRecognitionService.get_last_faces()
+    mem_mock = MagicMock()
+    service = FaceRecognitionService(mem_mock)
+    assert service.get_last_faces() == []
+
+    # Mock a confirmed face
+    mock_face = DetectedFace(
+        bounding_box=(100, 100, 50, 50),
+        center=(125.0, 125.0),
+        confidence=0.95,
+        person=None,
+        is_known=False,
+        identity_state=IdentityState.UNKNOWN,
+    )
+    service.confirm_identity([mock_face])
+    last_faces = service.get_last_faces()
+    assert len(last_faces) == 1
+    assert last_faces[0].center == (125.0, 125.0)
+
+
+def test_greeting_cooldown_and_temporal_context() -> None:
+    """Verify 50-minute greeting cooldown and temporal awareness."""
+    from lumi.vision.face import FaceRecognitionService
+
+    mem_mock = MagicMock()
+    service = FaceRecognitionService(mem_mock)
+
+    pid = "test_palash_123"
+    # First greeting check: should interact immediately
+    assert service.should_interact(pid, cooldown_s=3000.0) is True
+
+    # Immediate follow-up check (e.g. 5 seconds later): should reject/rate-limit
+    assert service.should_interact(pid, cooldown_s=3000.0) is False
+
+
 if __name__ == "__main__":
     test_servo_auto_relax_lifecycle()
     print("✓ test_servo_auto_relax_lifecycle PASSED")
@@ -159,4 +242,10 @@ if __name__ == "__main__":
     print("✓ test_gemini_live_software_aec PASSED")
     test_gemini_live_async_tool_execution()
     print("✓ test_gemini_live_async_tool_execution PASSED")
+    test_learned_rules_store_and_adaptation()
+    print("✓ test_learned_rules_store_and_adaptation PASSED")
+    test_camera_backend_close_and_face_service_cache()
+    print("✓ test_camera_backend_close_and_face_service_cache PASSED")
+    test_greeting_cooldown_and_temporal_context()
+    print("✓ test_greeting_cooldown_and_temporal_context PASSED")
     print("All improvement tests passed successfully!")

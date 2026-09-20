@@ -56,6 +56,7 @@ class FaceRecognitionService:
         self._buffer_size = 5  # 5 frames buffer (~0.75s)
         self._min_votes = 2    # At least 2 votes needed to confirm
         self._frame_counter = 0
+        self._last_confirmed_faces: List[DetectedFace] = []
 
     def _get_cascade(self, cv2: Any) -> Optional[Any]:
         if self._cascade_initialized:
@@ -322,7 +323,12 @@ class FaceRecognitionService:
         for tid in expired:
             del self._tracks[tid]
 
+        self._last_confirmed_faces = list(confirmed)
         return confirmed
+
+    def get_last_faces(self) -> List[DetectedFace]:
+        """Retrieve the most recent confirmed faces detected by the vision loop without reprocessing."""
+        return list(self._last_confirmed_faces)
 
     def _simulate_face_detection(self, frame: Any) -> List[DetectedFace]:
         return [

@@ -190,6 +190,11 @@ class LumiApplication:
         logger.info("Initiating graceful shutdown sequence...")
         self.running = False
 
+        if hasattr(self, "camera_server") and self.camera_server:
+            try:
+                self.camera_server.stop()
+            except Exception:
+                pass
         self.brain.stop()
         self.brain.reminders.stop()
         self.event_bus.stop()
@@ -242,13 +247,18 @@ def main() -> None:
 
     app = LumiApplication(settings)
 
-    def handle_sigint(sig: int, frame: Any) -> None:
+    import atexit
+
+    def handle_shutdown_signal(sig: int, frame: Any) -> None:
         print("\n")
-        logger.info("Interrupt signal received (SIGINT).")
+        logger.info(f"Interrupt/Termination signal received ({sig}).")
         app.shutdown()
         sys.exit(0)
 
-    signal.signal(signal.SIGINT, handle_sigint)
+    signal.signal(signal.SIGINT, handle_shutdown_signal)
+    if hasattr(signal, "SIGTERM"):
+        signal.signal(signal.SIGTERM, handle_shutdown_signal)
+    atexit.register(app.shutdown)
 
     if not app.startup():
         sys.exit(1)

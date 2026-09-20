@@ -259,6 +259,31 @@ class LumiBrain:
             }
         )
 
+        self.tools.register("adapt_behavior", self._tool_adapt_behavior,
+            "CALL THIS TOOL whenever the user gives feedback, advice, corrections, or instructions on how you should behave, speak, or perform actions "
+            "(e.g. 'তোমার তো এভাবে কথা বলা উচিত', 'হাত এতো বেশি নাড়াবে না', 'তুমি আমাকে এই নামে ডাকবে', etc.). "
+            "LUMI will analyze, permanently store this rule, and immediately adapt its behavior.",
+            {
+                "type": "object",
+                "properties": {
+                    "user_feedback": {
+                        "type": "string",
+                        "description": "The exact advice, correction, or behavioral instruction given by the user."
+                    },
+                    "adapted_rule": {
+                        "type": "string",
+                        "description": "Clear, concise imperative rule formulated from the user's advice."
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": ["behavior", "speech", "gesture", "general"],
+                        "description": "Category: 'behavior', 'speech', 'gesture', or 'general'."
+                    }
+                },
+                "required": ["user_feedback", "adapted_rule"]
+            }
+        )
+
         from ..ai.gemini_live import GeminiLiveClient
         
         self.conversation = ConversationEngine(self.memory, self.tools)
@@ -294,6 +319,15 @@ class LumiBrain:
         self._audio_thread: Optional[threading.Thread] = None
         # Silent mode: when set, suppress all greetings, gestures, and triggered injections until this timestamp
         self._silent_until: float = 0.0
+
+        # Learned behavioral rules store and temporal tracking
+        from ..memory.learned_rules import LearnedRulesStore
+        from pathlib import Path
+        data_dir = getattr(getattr(self, "settings", None), "app", None)
+        data_dir_path = getattr(data_dir, "data_dir", "data") if data_dir else "data"
+        self.learned_rules = LearnedRulesStore(Path(data_dir_path) / "learned_rules.json")
+        self._person_first_seen_date: Dict[str, str] = {}
+        self._person_last_greeting_time_str: Dict[str, str] = {}
 
         self._subscribe_events()
 
@@ -854,7 +888,11 @@ class LumiBrain:
             logger.info(
                 f"[RESPONSE] recognized_person='{person.name}' confidence={face.confidence:.2f}"
             )
-            if self.face_service.should_interact(person.id, cooldown_s=25.0):
+            # Cooldown check (50 minutes / 3000s default to prevent annoying repetitive interruptions)
+            vision_conf = getattr(getattr(self, "settings", None), "vision", None)
+            cooldown_val = getattr(vision_conf, "greeting_cooldown_s", 3000.0) if vision_conf else 3000.0
+
+            if self.face_service.should_interact(person.id, cooldown_s=cooldown_val):
                 # If LUMI is in silent mode, skip all greeting speech, gestures, and animations
                 if self._is_silent():
                     logger.info(f"Silent mode active: suppressing greeting for {person.name}.")
@@ -882,9 +920,43 @@ class LumiBrain:
                         msg_texts = [f"From {m['sender_name']}: {m['message_text']}" for m in msgs]
                         unread_msgs = f"\nURGENT: YOU HAVE UNREAD MESSAGES FOR {person.name}: {', '.join(msg_texts)}. YOU MUST TELL THEM THIS MESSAGE IMMEDIATELY AS SOON AS YOU GREET THEM!"
                         self.memory.mark_messages_read(person.id)
+
+                # Real-world temporal context awareness
+                import datetime
+                now_dt = datetime.datetime.now()
+                time_str = now_dt.strftime("%I:%M %p")
+                today_str = now_dt.strftime("%Y-%m-%d")
+                hour = now_dt.hour
+                if 5 <= hour < 12:
+                    time_period = "সকাল (Morning)"
+                elif 12 <= hour < 17:
+                    time_period = "দুপুর / বিকাল (Afternoon)"
+                elif 17 <= hour < 20:
+                    time_period = "সন্ধ্যা (Evening)"
+                else:
+                    time_period = "রাত (Night)"
+
+                is_first_today = (self._person_first_seen_date.get(person.id) != today_str)
+                if is_first_today:
+                    self._person_first_seen_date[person.id] = today_str
+                    encounter_context = (
+                        f"This is the FIRST TIME you are seeing {person.name} today. "
+                        f"Current local time: {time_str} ({time_period}). "
+                        f"Greet them warmly with an appropriate greeting for this time of day in conversational Bengali."
+                    )
+                else:
+                    last_time_seen = self._person_last_greeting_time_str.get(person.id, "earlier today")
+                    encounter_context = (
+                        f"You already saw and greeted {person.name} earlier today (around {last_time_seen}). "
+                        f"Current local time: {time_str} ({time_period}). "
+                        f"CRITICAL: Do NOT repeat an introductory greeting or morning greeting of the day. Acknowledge seeing them again casually and naturally "
+                        f"in Bengali (e.g., 'আরে {person.name}, আবার দেখা হলো! সব কেমন চলছে?' বা 'কোনো কাজ আছে নাকি?')."
+                    )
+                self._person_last_greeting_time_str[person.id] = time_str
                 
                 prompt = (
                     f"[VISUAL EVENT: You just saw {person.name} ({relationship}) in front of the camera right now!]\n"
+                    f"TEMPORAL CONTEXT: {encounter_context}\n"
                     f"Notes about them: {notes}. "
                     f"Recent memories: {fact_str}. {unread_msgs}\n"
                     f"INSTRUCTION: Greet {person.name} immediately, warmly, and naturally in conversational Bengali (বাংলা). "
@@ -898,11 +970,26 @@ class LumiBrain:
                     self.realtime_voice.inject_context(prompt, trigger_response=True)
                 elif hasattr(self, "tts") and hasattr(self, "speaker"):
                     import random
-                    local_greetings = [
-                        f"হ্যালো {person.name}! কেমন আছো?",
-                        f"আরে {person.name}! তোমাকে দেখে খুব ভালো লাগলো!",
-                        f"এই যে {person.name}! কেমন কাটছে তোমার দিন?"
-                    ]
+                    if is_first_today:
+                        if 5 <= hour < 12:
+                            time_greeting = f"শুভ সকাল {person.name}! কেমন আছেন?"
+                        elif 12 <= hour < 17:
+                            time_greeting = f"শুভ দুপুর {person.name}! দিন কেমন কাটছে?"
+                        elif 17 <= hour < 20:
+                            time_greeting = f"শুভ সন্ধ্যা {person.name}! কেমন আছেন?"
+                        else:
+                            time_greeting = f"হ্যালো {person.name}! এতো রাতেও জেগে আছেন? কেমন আছেন?"
+                        local_greetings = [
+                            time_greeting,
+                            f"হ্যালো {person.name}! আপনাকে দেখে খুব ভালো লাগলো!",
+                            f"এই যে {person.name}! কেমন কাটছে দিন?"
+                        ]
+                    else:
+                        local_greetings = [
+                            f"আরে {person.name}! আবার দেখা হলো! সব ঠিকঠাক?",
+                            f"এই যে {person.name}! কোনো সাহায্য লাগবে?",
+                            f"পলাশ ভাই, আবার আসলেন? কোনো দরকার?" if "palash" in person.name.lower() else f"আরে {person.name}! সব কেমন চলছে?"
+                        ]
                     greeting_text = random.choice(local_greetings)
                     audio_path = self.tts.synthesize(greeting_text)
                     if audio_path:
@@ -924,7 +1011,9 @@ class LumiBrain:
                 self.face_service.set_pending_face(face.embedding)
             
             now_t = time.time()
-            if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) >= 20.0:
+            unknown_vision_conf = getattr(getattr(self, "settings", None), "vision", None)
+            unknown_cooldown = getattr(unknown_vision_conf, "unknown_greeting_cooldown_s", 180.0) if unknown_vision_conf else 180.0
+            if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) >= unknown_cooldown:
                 if self._is_silent():
                     logger.info("Silent mode active: suppressing unknown-person greeting.")
                     return
@@ -1227,6 +1316,43 @@ class LumiBrain:
         self._silent_until = now + 300.0
         logger.info("Silent mode activated for 5 minutes (default).")
         return "silent_mode_active_for:300s"
+
+    def _tool_adapt_behavior(self, user_feedback: str, adapted_rule: str, category: str = "general") -> str:
+        """Analyze, store, and dynamically adapt to behavioral instructions and advice from the user."""
+        # 1. Store in JSON persistent file
+        if hasattr(self, "learned_rules"):
+            self.learned_rules.add_rule(user_feedback, adapted_rule, category)
+
+        # 2. Store in SQLite facts as a permanent system directive
+        if hasattr(self, "memory") and self.memory:
+            try:
+                self.memory.remember_fact(
+                    fact_text=f"[LEARNED RULE]: {adapted_rule} (from user advice: '{user_feedback}')",
+                    category="user_directive",
+                    source="user_correction",
+                )
+            except Exception as e:
+                logger.debug(f"Could not persist rule to SQLite facts: {e}")
+
+        # 3. Store in Mem0 if available
+        if hasattr(self, "mem0") and hasattr(self.mem0, "remember_fact_sync"):
+            try:
+                self.mem0.remember_fact_sync(
+                    person_id="system_rules",
+                    fact=f"Behavior rule: {adapted_rule}"
+                )
+            except Exception:
+                pass
+
+        # 4. Dynamically inject into active Gemini Live session
+        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):
+            self.realtime_voice.inject_context(
+                f"[BEHAVIORAL DIRECTIVE ADOPTED]: You have just learned and adopted this new behavior rule: '{adapted_rule}'. "
+                "Always adhere to this rule going forward in this conversation and future interactions."
+            )
+
+        logger.info(f"🧠 [SELF-LEARNING] Adopted rule: '{adapted_rule}' (Category: {category})")
+        return f"পরামর্শটি গ্রহণ করা হয়েছে এবং মেমোরিতে সেভ করা হয়েছে: '{adapted_rule}'। আমি এখন থেকে এই নিয়মটি সবসময় মেনে চলব।"
 
     def _tool_analyze_plant(self) -> str:
         frame = self.camera.get_frame()

@@ -76,6 +76,8 @@ class VisionConfig:
     fps: int = 15
     face_recognition_enabled: bool = True
     object_detection_enabled: bool = True
+    greeting_cooldown_s: float = 3000.0  # 50 minutes cooldown between greetings for known persons
+    unknown_greeting_cooldown_s: float = 180.0  # 3 minutes cooldown for unknown persons
 
 
 @dataclass

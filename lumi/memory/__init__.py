@@ -10,12 +10,14 @@ from .models import (
     Reminder,
     utc_now_iso,
 )
+from .learned_rules import LearnedRulesStore
 
 __all__ = [
     "ConsentStatus",
     "ConversationTurn",
     "Database",
     "Fact",
+    "LearnedRulesStore",
     "MemoryManager",
     "Person",
     "Reminder",

@@ -122,17 +122,36 @@ class PiCameraBackend(CameraBackendBase):
         self._running = False
 
     def start(self) -> bool:
-        try:
-            from picamera2 import Picamera2  # type: ignore
-            self._picam = Picamera2()
-            config = self._picam.create_preview_configuration(main={"size": (self.width, self.height)})
-            self._picam.configure(config)
-            self._picam.start()
-            self._running = True
-            logger.info("Picamera2 backend initialized for Pi 5.")
+        if self._running and self._picam is not None:
             return True
-        except Exception as e:
-            logger.warning(f"Picamera2 initialization failed ({e}).")
+        for attempt in range(2):
+            try:
+                from picamera2 import Picamera2  # type: ignore
+                if self._picam is not None:
+                    try:
+                        self._picam.close()
+                    except Exception:
+                        pass
+                    self._picam = None
+
+                self._picam = Picamera2()
+                config = self._picam.create_preview_configuration(main={"size": (self.width, self.height)})
+                self._picam.configure(config)
+                self._picam.start()
+                self._running = True
+                logger.info("Picamera2 backend initialized for Pi 5.")
+                return True
+            except Exception as e:
+                logger.warning(f"Picamera2 initialization attempt {attempt + 1} failed ({e}).")
+                if self._picam is not None:
+                    try:
+                        self._picam.close()
+                    except Exception:
+                        pass
+                    self._picam = None
+                if attempt == 0:
+                    import time
+                    time.sleep(1.0)
         self._running = False
         return False
 
@@ -143,6 +162,14 @@ class PiCameraBackend(CameraBackendBase):
                 self._picam.stop()  # type: ignore
             except Exception:
                 pass
+            try:
+                self._picam.close()  # type: ignore
+            except Exception:
+                pass
+            self._picam = None
+
+    def __del__(self) -> None:
+        self.stop()
 
     def is_available(self) -> bool:
         return self._running

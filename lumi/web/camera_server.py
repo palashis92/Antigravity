@@ -189,7 +189,14 @@ class CameraFeedServer:
     def stop(self) -> None:
         self._running = False
         if self._server:
-            self._server.shutdown()
+            try:
+                self._server.shutdown()
+            except Exception:
+                pass
+            try:
+                self._server.server_close()
+            except Exception:
+                pass
 
     def _capture_loop(self) -> None:
         """Continuously capture frames, annotate with face boxes, encode as JPEG."""
@@ -206,10 +213,10 @@ class CameraFeedServer:
 
                 import cv2
 
-                # Optionally overlay face detection boxes
+                # Overlay face detection boxes from LUMI's active perception without burning CPU
                 if self.face_service:
                     try:
-                        faces = self.face_service.detect_and_recognize(frame)
+                        faces = self.face_service.get_last_faces() if hasattr(self.face_service, "get_last_faces") else []
                         for face in faces:
                             x, y, w, h = face.bounding_box
                             if face.is_known and face.person:
