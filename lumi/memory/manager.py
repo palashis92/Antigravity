@@ -116,6 +116,53 @@ class MemoryManager:
             rows = self.db.execute_query("SELECT * FROM people ORDER BY last_seen DESC")
         return [Person.from_row(r) for r in rows]
 
+    def find_person_by_face(
+        self, embedding: list, threshold: float = 0.55
+    ) -> Optional[Person]:
+        """Find a person whose stored face embedding matches the given embedding.
+
+        Uses face_recognition library if available, with a pure Python Euclidean L2
+        distance fallback. Returns best matching person if distance <= threshold, else None.
+        """
+        if not embedding:
+            return None
+
+        people = self.list_people()
+        all_candidates: List[Tuple[Person, List[float]]] = []
+        for p in people:
+            for emb in p.face_embeddings:
+                if emb and len(emb) == len(embedding):
+                    all_candidates.append((p, emb))
+
+        if not all_candidates:
+            return None
+
+        try:
+            import face_recognition
+            import numpy as np
+            known_embeddings = [c[1] for c in all_candidates]
+            distances = face_recognition.face_distance(known_embeddings, np.array(embedding))
+            best_idx = int(distances.argmin())
+            best_dist = float(distances[best_idx])
+        except ImportError:
+            import math
+            best_dist = float("inf")
+            best_idx = -1
+            for idx, (_, emb) in enumerate(all_candidates):
+                dist = math.sqrt(sum((a - b) ** 2 for a, b in zip(emb, embedding)))
+                if dist < best_dist:
+                    best_dist = dist
+                    best_idx = idx
+
+        if best_idx >= 0 and best_dist <= threshold:
+            best_person = all_candidates[best_idx][0]
+            logger.info(
+                f"[MATCH] Face matched to person_id={best_person.id} name='{best_person.name}' "
+                f"(dist={best_dist:.3f} <= {threshold})"
+            )
+            return best_person
+        return None
+
     def update_person(self, person: Person) -> None:
         """Update an existing person profile."""
         query = """

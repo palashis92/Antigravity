@@ -38,6 +38,20 @@ class Person:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
     @property
+    def age(self) -> Optional[int]:
+        return self.metadata.get("age")
+
+    @age.setter
+    def age(self, value: Optional[int]) -> None:
+        if value is None:
+            self.metadata.pop("age", None)
+        else:
+            try:
+                self.metadata["age"] = int(value)
+            except (ValueError, TypeError):
+                self.metadata["age"] = None
+
+    @property
     def face_embedding(self) -> Optional[List[float]]:
         return self.metadata.get("face_embedding")
 
@@ -47,6 +61,25 @@ class Person:
             self.metadata.pop("face_embedding", None)
         else:
             self.metadata["face_embedding"] = value
+            self.add_face_embedding(value)
+
+    @property
+    def face_embeddings(self) -> List[List[float]]:
+        """Return all stored face embeddings for this person."""
+        embeddings = self.metadata.get("face_embeddings", [])
+        if not embeddings and self.face_embedding:
+            return [self.face_embedding]
+        return embeddings
+
+    def add_face_embedding(self, embedding: List[float], max_samples: int = 5) -> None:
+        """Store multiple face samples for multi-angle/lighting robustness."""
+        if not embedding:
+            return
+        samples = list(self.metadata.get("face_embeddings", []))
+        samples.append(embedding)
+        if len(samples) > max_samples:
+            samples = samples[-max_samples:]
+        self.metadata["face_embeddings"] = samples
 
     @property
     def voice_embedding(self) -> Optional[List[float]]:

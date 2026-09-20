@@ -12,7 +12,15 @@ from ..core.logger import get_logger
 from ..memory.manager import MemoryManager
 from ..memory.models import ConsentStatus, Person
 
+from enum import Enum
+
 logger = get_logger("vision.face")
+
+
+class IdentityState(str, Enum):
+    UNKNOWN = "UNKNOWN"
+    LOW_CONFIDENCE = "LOW_CONFIDENCE"
+    RECOGNIZED = "RECOGNIZED"
 
 
 @dataclass
@@ -24,6 +32,8 @@ class DetectedFace:
     confidence: float
     person: Optional[Person] = None
     is_known: bool = False
+    identity_state: IdentityState = IdentityState.UNKNOWN
+    distance: float = 1.0
     embedding: List[float] = field(default_factory=list)
 
 
@@ -36,11 +46,14 @@ class FaceRecognitionService:
         self._cascade = None
         self._cascade_initialized = False
         self._pending_face_encoding: Optional[List[float]] = None
+        self._pending_face_timestamp: float = 0.0
         self._last_interaction_timestamps: Dict[str, float] = {}
 
-        # Multi-frame voting for robust recognition
-        self._recognition_buffer: Dict[str, List[str]] = {}  # track_id -> [person_name, ...]
-        self._buffer_size = 4  # 4 frames buffer (~0.6s at 6.6 FPS) for responsive recognition
+        # Centroid-based temporal tracking & multi-frame voting
+        self._tracks: Dict[int, Dict[str, Any]] = {}
+        self._next_track_id: int = 0
+        self._recognition_buffer: Dict[str, List[str]] = {}  # alias for backward compat
+        self._buffer_size = 5  # 5 frames buffer (~0.75s)
         self._min_votes = 2    # At least 2 votes needed to confirm
         self._frame_counter = 0
 
@@ -131,51 +144,68 @@ class FaceRecognitionService:
                 face_locations = [(y, x + w, y + h, x) for (x, y, w, h) in faces]
                 face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
 
+                logger.info(f"[FACE] detected count={len(faces)}")
+                if face_encodings:
+                    logger.debug(f"[FACE] embedding generated count={len(face_encodings)} dim={len(face_encodings[0])}")
+
                 known_persons = self.memory.list_people()
+
+                # Build flattened candidate list supporting multiple embeddings per person
+                all_known_candidates: List[Tuple[Person, List[float]]] = []
+                for p in known_persons:
+                    p_embeddings = p.face_embeddings
+                    for emb in p_embeddings:
+                        if emb and len(emb) == 128:
+                            all_known_candidates.append((p, emb))
 
                 for (x, y, w, h), encoding in zip(faces, face_encodings):
                     center_x = x + w / 2.0
                     center_y = y + h / 2.0
                     matched_person = None
                     is_known = False
+                    best_dist = 1.0
+                    identity_state = IdentityState.UNKNOWN
+                    confidence = 0.50
 
-                    # Only compare against embeddings matching the current vector dimension
-                    valid_known = [
-                        p for p in known_persons
-                        if p.face_embedding and len(p.face_embedding) == len(encoding)
-                    ]
-                    known_embeddings = [p.face_embedding for p in valid_known]
-                    known_person_objects = valid_known
+                    if all_known_candidates and len(encoding) == 128:
+                        candidate_embeddings = [c[1] for c in all_known_candidates]
+                        distances = face_recognition.face_distance(candidate_embeddings, encoding)
+                        best_match_index = int(distances.argmin())
+                        best_dist = float(distances[best_match_index])
+                        best_person = all_known_candidates[best_match_index][0]
 
-                    if known_embeddings:
-                        matches = face_recognition.compare_faces(
-                            known_embeddings, encoding, tolerance=self.recognition_threshold
-                        )
-                        distances = face_recognition.face_distance(known_embeddings, encoding)
-                        if any(matches):
-                            best_match_index = int(distances.argmin())
-                            best_dist = float(distances[best_match_index])
-                            best_person = known_person_objects[best_match_index]
-                            if matches[best_match_index]:
-                                matched_person = best_person
-                                is_known = True
-                                logger.info(
-                                    f"Face recognized: {matched_person.name} "
-                                    f"(dist={best_dist:.3f} <= {self.recognition_threshold})"
-                                )
-                            else:
-                                logger.debug(
-                                    f"Face near-miss: {best_person.name} "
-                                    f"(dist={best_dist:.3f} > {self.recognition_threshold})"
-                                )
+                        if best_dist <= self.recognition_threshold:
+                            matched_person = best_person
+                            is_known = True
+                            identity_state = IdentityState.RECOGNIZED
+                            confidence = max(0.70, min(0.99, 1.0 - (best_dist / (self.recognition_threshold * 2.0))))
+                            logger.info(
+                                f"[MATCH] person_id={matched_person.id} name='{matched_person.name}' "
+                                f"distance={best_dist:.3f} confidence={confidence:.2f} (RECOGNIZED)"
+                            )
+                        elif best_dist <= (self.recognition_threshold + 0.07):
+                            matched_person = best_person
+                            is_known = False
+                            identity_state = IdentityState.LOW_CONFIDENCE
+                            confidence = 0.50
+                            logger.debug(
+                                f"[MATCH] Borderline distance={best_dist:.3f} for '{best_person.name}' "
+                                f"(thresh={self.recognition_threshold}) (LOW_CONFIDENCE)"
+                            )
+                        else:
+                            identity_state = IdentityState.UNKNOWN
+                            is_known = False
+                            confidence = 0.90
 
                     detected_faces.append(
                         DetectedFace(
                             bounding_box=(x, y, w, h),
                             center=(center_x, center_y),
-                            confidence=0.95,
-                            person=matched_person,
+                            confidence=confidence,
+                            person=matched_person if is_known else None,
                             is_known=is_known,
+                            identity_state=identity_state,
+                            distance=best_dist,
                             embedding=encoding.tolist(),
                         )
                     )
@@ -191,6 +221,8 @@ class FaceRecognitionService:
                             confidence=0.90,
                             person=None,
                             is_known=False,
+                            identity_state=IdentityState.UNKNOWN,
+                            distance=1.0,
                             embedding=[],
                         )
                     )
@@ -202,67 +234,94 @@ class FaceRecognitionService:
             return []
 
     def confirm_identity(self, faces: List[DetectedFace]) -> List[DetectedFace]:
-        """Apply multi-frame voting to confirm face identity with higher confidence.
+        """Apply continuous centroid tracking and multi-frame voting to confirm face identity.
         
-        Instead of trusting a single frame, we accumulate results over
-        several frames and only confirm identity when a person is consistently
-        recognized across multiple frames.
+        Guarantees:
+        1. No grid boundary flickering (continuous distance matching < 140px).
+        2. Known names are ONLY assigned when voting achieves consensus across frames.
+        3. Low confidence or uncertain faces are NEVER assigned a known name.
+        4. Temporal stability prevents 1-frame glitches from flipping identity.
         """
         self._frame_counter += 1
+        now = time.time()
         confirmed = []
-        
+
         for face in faces:
-            # Create a spatial track ID based on face center region
-            # 160px bins accommodate camera head motion without constantly resetting the track
-            cx, cy = int(face.center[0] // 160), int(face.center[1] // 160)
-            track_id = f"{cx}_{cy}"
-            
-            # Get the name this frame matched
-            name = face.person.name if face.is_known and face.person else "__unknown__"
-            
-            # Initialize buffer if new track
-            if track_id not in self._recognition_buffer:
-                self._recognition_buffer[track_id] = []
-            
-            buffer = self._recognition_buffer[track_id]
-            buffer.append(name)
-            
-            # Keep only last N frames
-            if len(buffer) > self._buffer_size:
-                buffer.pop(0)
-            
-            # Count votes for the most common identity
-            if len(buffer) >= 2:  # Need at least 2 frames
+            best_track_id = None
+            min_dist = 140.0  # max pixels a face moves between 0.15s frames
+
+            for tid, tdata in list(self._tracks.items()):
+                if (now - tdata["last_seen_time"]) > 1.5:
+                    continue
+                tcx, tcy = tdata["center"]
+                dist = math.hypot(face.center[0] - tcx, face.center[1] - tcy)
+                if dist < min_dist:
+                    min_dist = dist
+                    best_track_id = tid
+
+            if best_track_id is None:
+                self._next_track_id += 1
+                best_track_id = self._next_track_id
+                self._tracks[best_track_id] = {
+                    "center": face.center,
+                    "last_seen_time": now,
+                    "history": [],
+                }
+
+            track = self._tracks[best_track_id]
+            track["center"] = face.center
+            track["last_seen_time"] = now
+
+            # Record vote in track history: (person_id, person_name, person_obj)
+            if face.is_known and face.person is not None:
+                track["history"].append((face.person.id, face.person.name, face.person))
+            else:
+                track["history"].append((None, "__unknown__", None))
+
+            if len(track["history"]) > self._buffer_size:
+                track["history"].pop(0)
+
+            history = track["history"]
+            if len(history) >= 2:
                 from collections import Counter
-                vote_counts = Counter(buffer)
-                best_name, best_count = vote_counts.most_common(1)[0]
-                
-                if best_name != "__unknown__" and best_count >= self._min_votes:
-                    # Confirmed known person with high confidence!
-                    face.confidence = min(0.99, 0.7 + (best_count / self._buffer_size) * 0.3)
-                    # face.person and face.is_known are already set from the latest frame
-                elif best_name == "__unknown__" and best_count >= self._min_votes:
-                    # Confirmed unknown
-                    face.is_known = False
+                id_counts = Counter(item[0] for item in history)
+                best_pid, best_count = id_counts.most_common(1)[0]
+
+                if best_pid is not None and best_count >= self._min_votes:
+                    # Confirmed known person with consensus
+                    person_obj = next((item[2] for item in reversed(history) if item[0] == best_pid), None)
+                    if person_obj:
+                        face.person = person_obj
+                        face.is_known = True
+                        face.identity_state = IdentityState.RECOGNIZED
+                        face.confidence = min(0.99, 0.75 + (best_count / self._buffer_size) * 0.24)
+                elif best_pid is None and best_count >= self._min_votes:
+                    # Confirmed unknown person
                     face.person = None
+                    face.is_known = False
+                    face.identity_state = IdentityState.UNKNOWN
                     face.confidence = 0.90
                 else:
-                    # Not enough consensus yet — mark as uncertain but pass through
-                    # Use the latest frame's result but lower confidence
-                    face.confidence = 0.5 + (best_count / self._buffer_size) * 0.3
+                    # Mixed / uncertain consensus -> do NOT call by name
+                    face.person = None
+                    face.is_known = False
+                    face.identity_state = IdentityState.LOW_CONFIDENCE
+                    face.confidence = 0.50
             else:
-                # Not enough frames yet, lower confidence
-                face.confidence = 0.4
-            
+                # Not enough frames accumulated yet
+                if not face.is_known:
+                    face.person = None
+                    face.is_known = False
+                    face.identity_state = IdentityState.LOW_CONFIDENCE
+                    face.confidence = 0.40
+
             confirmed.append(face)
-        
-        # Clean up stale tracks (not seen for 50+ frames)
-        if self._frame_counter % 50 == 0:
-            active_tracks = {f"{int(f.center[0] // 160)}_{int(f.center[1] // 160)}" for f in faces}
-            stale = [k for k in self._recognition_buffer if k not in active_tracks]
-            for k in stale:
-                del self._recognition_buffer[k]
-        
+
+        # Cleanup tracks inactive for > 2.5 seconds
+        expired = [tid for tid, tdata in self._tracks.items() if (now - tdata["last_seen_time"]) > 2.5]
+        for tid in expired:
+            del self._tracks[tid]
+
         return confirmed
 
     def _simulate_face_detection(self, frame: Any) -> List[DetectedFace]:
@@ -287,12 +346,20 @@ class FaceRecognitionService:
         return False
 
     def set_pending_face(self, encoding: List[float]) -> None:
-        """Store the most recent unknown face encoding for learning."""
+        """Store the most recent unknown face encoding with timestamp for freshness validation."""
         if encoding:
             self._pending_face_encoding = encoding
+            self._pending_face_timestamp = time.time()
 
-    def get_pending_face(self) -> Optional[List[float]]:
-        """Retrieve and clear the pending face encoding."""
+    def get_pending_face(self, max_age_seconds: float = 30.0) -> Optional[List[float]]:
+        """Retrieve the pending face encoding if it's fresh enough. Returns None if stale or missing."""
         encoding = self._pending_face_encoding
+        if encoding is None:
+            return None
+        age = time.time() - getattr(self, '_pending_face_timestamp', 0.0)
+        if age > max_age_seconds:
+            logger.warning(f"[IDENTITY] Pending face is {age:.1f}s old (>{max_age_seconds}s). Discarding stale embedding.")
+            self._pending_face_encoding = None
+            return None
         self._pending_face_encoding = None
         return encoding

@@ -19,6 +19,7 @@ import tests.test_state_manager as tsm
 import tests.test_vision as tv
 import tests.test_anjum_mode as tanjum
 import tests.test_audio as taud
+import tests.test_identity_pipeline as tip
 
 
 class DummyMonkeypatch:
@@ -78,10 +79,15 @@ def main():
         # Procedural Eye Displays
         ("test_expression_configs", te.test_expression_configs, ()),
         ("test_eye_renderer_lifecycle", te.test_eye_renderer_lifecycle, ()),
-        # Vision Subsystems
+        # Vision & Face Recognition Subsystems
         ("test_plant_disease_detection", tv.test_plant_disease_detection, ()),
         ("test_chess_vision_fen", tv.test_chess_vision_fen, ()),
         ("test_face_recognition", tv.test_face_recognition, ()),
+        ("test_person_model_age_and_multi_embedding", tip.test_person_model_age_and_multi_embedding, ()),
+        ("test_test_case_a_and_b_recognition_and_isolation", tip.test_test_case_a_and_b_recognition_and_isolation, ()),
+        ("test_test_case_c_unknown_person_no_hallucinated_name", tip.test_test_case_c_unknown_person_no_hallucinated_name, ()),
+        ("test_test_case_d_face_and_name_never_cross_associated", tip.test_test_case_d_face_and_name_never_cross_associated, ()),
+        ("test_pending_face_timestamp_freshness", tip.test_pending_face_timestamp_freshness, ()),
         # AI & Conversation
         ("test_tool_registry", tai.test_tool_registry, ()),
         ("test_conversation_engine_responses", tai.test_conversation_engine_responses, ()),

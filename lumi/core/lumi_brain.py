@@ -119,6 +119,7 @@ class LumiBrain:
             "properties": {
                 "name": {"type": "string", "description": "The person's full name."},
                 "relationship": {"type": "string", "description": "Their relationship to Palash (the owner), e.g. friend, brother, guest."},
+                "age": {"type": "integer", "description": "The person's age if mentioned (e.g. 25)."},
                 "notes": {"type": "string", "description": "Any short important facts or details to remember about them."}
             }, 
             "required": ["name"]
@@ -320,10 +321,8 @@ class LumiBrain:
     def _on_turn_complete(self, event: Event) -> None:
         person = self.active_person
         if not person:
-            # Fallback: attribute conversation to owner so memory is never lost
-            person = self.memory.find_person_by_name("Palash")
-            if not person:
-                return
+            # No active person identified — don't attribute to anyone
+            return
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
 
@@ -336,7 +335,13 @@ class LumiBrain:
                         continue  # Skip the active person (already have their context)
                     name_lower = p.name.lower()
                     first_name = name_lower.split()[0] if name_lower else ""
-                    if name_lower in u_text.lower() or (len(first_name) > 2 and first_name in u_text.lower()):
+                    import re
+                    pattern = rf"(?:\b|_){re.escape(name_lower)}(?:\b|_)"
+                    matched = bool(re.search(pattern, u_text.lower()))
+                    if not matched and len(first_name) >= 3:
+                        first_pattern = rf"(?:\b|_){re.escape(first_name)}(?:\b|_)"
+                        matched = bool(re.search(first_pattern, u_text.lower()))
+                    if matched:
                         mentioned_facts = self.memory.recall_facts(person_id=p.id)
                         if mentioned_facts:
                             facts_str = ", ".join([f.fact_text for f in mentioned_facts[:3]])
@@ -558,6 +563,25 @@ class LumiBrain:
                 return
 
             if speaker_name and confidence >= 0.75:
+                logger.info(f"[VOICE] detected name={speaker_name} confidence={confidence:.2f}")
+                now_t = time.time()
+                face_in_view = (now_t - getattr(self, "_last_face_seen_time", 0.0)) < 4.0
+                
+                # Visual identity always takes precedence when a face is currently in view
+                if face_in_view and self.active_person:
+                    if speaker_name.lower() != self.active_person.name.lower():
+                        logger.info(
+                            f"[VOICE] Ignoring speaker ID '{speaker_name}' because active face "
+                            f"'{self.active_person.name}' is in view."
+                        )
+                        return
+                elif face_in_view and not self.active_person:
+                    # An unknown face is in view — do not falsely attribute speaker name
+                    logger.info(
+                        f"[VOICE] Suppressing speaker update '{speaker_name}' because an unknown face is looking at camera."
+                    )
+                    return
+
                 if speaker_name != self._current_speaker:
                     self._current_speaker = speaker_name
                     logger.info(f"🎙️ Active speaker changed to: {speaker_name}")
@@ -756,7 +780,11 @@ class LumiBrain:
         self._last_detected_faces = faces
 
         faces = self.face_service.confirm_identity(faces)
-        
+        if not faces:
+            return
+
+        # Prioritize recognized known faces over unknown, then sort by highest confidence
+        faces.sort(key=lambda f: (not f.is_known, -f.confidence))
         face = faces[0]
         now = time.time()
         self._last_face_seen_time = now
@@ -820,6 +848,12 @@ class LumiBrain:
             person = face.person
             self.active_person = person
             self._last_face_seen_time = time.time()
+            logger.info(
+                f"[MEMORY] loading profile for person_id={person.id} name='{person.name}' age={person.age}"
+            )
+            logger.info(
+                f"[RESPONSE] recognized_person='{person.name}' confidence={face.confidence:.2f}"
+            )
             if self.face_service.should_interact(person.id, cooldown_s=25.0):
                 # If LUMI is in silent mode, skip all greeting speech, gestures, and animations
                 if self._is_silent():
@@ -875,7 +909,17 @@ class LumiBrain:
                         self.speaker.play_file(audio_path, block=False)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
         else:
-            # Unknown person learning hook
+            # Unknown or unconfirmed person — clear active_person to prevent stale attribution
+            self.active_person = None
+
+            # If identity is LOW_CONFIDENCE, wait for multi-frame voting to stabilize
+            # Do NOT falsely assume stranger or ask for their name during temporary glitches
+            from ..vision.face import IdentityState
+            if getattr(face, "identity_state", None) == IdentityState.LOW_CONFIDENCE:
+                logger.debug("[IDENTITY] Face in LOW_CONFIDENCE state — awaiting temporal stabilization.")
+                return
+
+            # Confirmed unknown person learning hook
             if hasattr(self.face_service, "set_pending_face"):
                 self.face_service.set_pending_face(face.embedding)
             
@@ -936,25 +980,63 @@ class LumiBrain:
     # =========================================================================
     # Realtime Tools Implementation
     # =========================================================================
-    def _tool_memorize_person(self, name: str, relationship: str = "guest", notes: str = "") -> str:
+    def _tool_memorize_person(self, name: str, relationship: str = "guest", age: Optional[int] = None, notes: str = "") -> str:
         """Saves the pending unknown face with detailed metadata and starts voice enrollment."""
         encoding = self.face_service.get_pending_face()
         if not encoding:
             return "No unknown face is currently in view to memorize. Please ask them to look at the camera."
         
-        from ..memory.models import ConsentStatus
-        self.memory.remember_person(
-            name=name,
-            relationship=relationship,
-            consent_status=ConsentStatus.GRANTED,
-            preferred_language="bn"
-        )
-        person = self.memory.find_person_by_name(name)
-        if person:
-            person.face_embedding = encoding
+        from ..memory.models import ConsentStatus, utc_now_iso
+        
+        # Face-based dedup: check if this face already belongs to someone
+        existing_face_person = self.memory.find_person_by_face(encoding)
+        if existing_face_person:
+            # This face is already registered — update name if different
+            if existing_face_person.name.lower() != name.strip().lower():
+                logger.warning(
+                    f"[IDENTITY] Face already belongs to '{existing_face_person.name}', "
+                    f"but user said name is '{name}'. Updating name."
+                )
+                existing_face_person.name = name.strip()
+            existing_face_person.last_seen = utc_now_iso()
+            existing_face_person.interaction_count += 1
+            if relationship and relationship != "guest":
+                existing_face_person.relationship = relationship
+            if age is not None:
+                existing_face_person.age = age
             if notes:
-                person.notes = notes
-            self.memory.update_person(person)
+                existing_face_person.notes = notes
+            existing_face_person.add_face_embedding(encoding)
+            self.memory.update_person(existing_face_person)
+            person = existing_face_person
+            logger.info(f"[PROFILE] updating person_id={person.id} name='{person.name}' age={person.age}")
+        else:
+            # New face — create new person
+            self.memory.remember_person(
+                name=name,
+                relationship=relationship,
+                consent_status=ConsentStatus.GRANTED,
+                preferred_language="bn"
+            )
+            person = self.memory.find_person_by_name(name)
+            if person:
+                person.face_embedding = encoding
+                if age is not None:
+                    person.age = age
+                if notes:
+                    person.notes = notes
+                self.memory.update_person(person)
+                logger.info(f"[PROFILE] updating person_id={person.id} name='{person.name}' age={person.age}")
+
+        if person:
+            # Immediately activate this person so conversations are attributed correctly
+            self.active_person = person
+            # Clear voting buffers so subsequent frames recognize the new person right away
+            if hasattr(self.face_service, '_tracks'):
+                self.face_service._tracks.clear()
+            if hasattr(self.face_service, '_recognition_buffer'):
+                self.face_service._recognition_buffer.clear()
+            logger.info(f"[IDENTITY] Memorized person '{name}' (id={person.id}), set as active_person.")
             
             # Start voice enrollment in background if engine available
             if self.speaker_id and self.speaker_id.is_available():
