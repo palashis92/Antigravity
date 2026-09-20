@@ -26,6 +26,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         self.volume = volume
         self._muted = False
         self._current_process: Optional[subprocess.Popen] = None
+        self._stream_proc: Optional[subprocess.Popen] = None
         self._stream_queue: queue.Queue = queue.Queue()
         self._stream_running = True
         self._stream_thread = threading.Thread(
@@ -76,6 +77,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                             proc.wait(timeout=0.1)
                         except Exception: pass
                         proc = None
+                        self._stream_proc = None
                     continue
 
                 if proc is None or proc.poll() is not None or current_sample_rate != sample_rate:
@@ -87,6 +89,8 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                             if proc.stdin: proc.stdin.close()
                             proc.terminate()
                         except Exception: pass
+                        proc = None
+                        self._stream_proc = None
                         
                     current_sample_rate = sample_rate
                     device = "plug:default" if self.alsa_device == "default" else self.alsa_device
@@ -98,6 +102,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                             stderr=subprocess.PIPE,
                             text=False
                         )
+                        self._stream_proc = proc
 
                 if proc and proc.stdin:
                     proc.stdin.write(audio_bytes)
@@ -119,6 +124,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                         proc.wait(timeout=0.2)
                     except Exception: pass
                 proc = None
+                self._stream_proc = None
 
         if proc is not None:
             try:
@@ -132,6 +138,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                 proc.wait(timeout=0.2)
             except Exception: pass
             proc = None
+            self._stream_proc = None
 
     def _detect_alsa_device(self) -> None:
         """Find the MAX98357A card index automatically if available."""
@@ -268,8 +275,33 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         self._stream_queue.put((audio_bytes, sample_rate))
         return True
 
+    def stop_stream(self) -> None:
+        """Immediately stop currently streaming audio and clear the stream queue without stopping the worker thread."""
+        import queue
+        while not self._stream_queue.empty():
+            try:
+                self._stream_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        proc = self._stream_proc
+        if proc is not None:
+            try:
+                if proc.stdin: proc.stdin.close()
+            except Exception: pass
+            try:
+                if proc.stderr: proc.stderr.close()
+            except Exception: pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=0.1)
+            except Exception: pass
+            self._stream_proc = None
+        logger.debug("I2S audio stream stopped and queue drained.")
+
     def stop(self) -> None:
-        self._stream_running = False
+        """Interrupt active playback (both file and stream) immediately."""
+        self.stop_stream()
         if self._current_process is not None:
             try:
                 if self._current_process.stdin: self._current_process.stdin.close()
@@ -283,6 +315,17 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             except Exception:
                 pass
             self._current_process = None
+
+    def shutdown(self) -> None:
+        """Completely shut down the speaker backend and worker threads."""
+        self._stream_running = False
+        self.stop()
+        if hasattr(self, "_stream_thread") and self._stream_thread.is_alive():
+            try:
+                self._stream_thread.join(timeout=0.5)
+            except Exception:
+                pass
+        logger.info("I2SSpeakerBackend shut down cleanly.")
 
     def set_volume(self, volume_percent: int) -> None:
         self.volume = max(0, min(100, volume_percent))
@@ -320,6 +363,18 @@ class SpeakerInterface:
 
     def stop(self) -> None:
         self.backend.stop()
+
+    def stop_stream(self) -> None:
+        if hasattr(self.backend, "stop_stream"):
+            self.backend.stop_stream()
+        else:
+            self.backend.stop()
+
+    def shutdown(self) -> None:
+        if hasattr(self.backend, "shutdown"):
+            self.backend.shutdown()
+        else:
+            self.backend.stop()
 
     def set_volume(self, volume_percent: int) -> None:
         self.backend.set_volume(volume_percent)

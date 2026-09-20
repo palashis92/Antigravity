@@ -51,6 +51,7 @@ class ServoController:
         self.current_angles: Dict[str, float] = {}
         self.target_angles: Dict[str, float] = {}
         self._last_move_time: float = time.time()
+        self._is_relaxed: bool = False
         self._lock = threading.RLock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -186,8 +187,37 @@ class ServoController:
 
         self.startup_self_check_and_home()
         self._running = True
+        self._start_auto_relax_loop()
         logger.info("ServoController online with calibrated channels: " + ", ".join(self.channels.keys()))
         return True
+
+    def _start_auto_relax_loop(self) -> None:
+        """Start the background watchdog thread that relaxes idle servos."""
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._running = True
+            self._thread = threading.Thread(
+                target=self._auto_relax_worker,
+                name="ServoAutoRelaxWatchdog",
+                daemon=True,
+            )
+            self._thread.start()
+
+    def _auto_relax_worker(self) -> None:
+        """Daemon worker loop checking servo idle timeout to protect hardware."""
+        while self._running:
+            time.sleep(0.5)
+            if not self._running:
+                break
+            now = time.time()
+            with self._lock:
+                if (
+                    not self._is_relaxed
+                    and self.auto_relax_delay_s > 0
+                    and (now - self._last_move_time >= self.auto_relax_delay_s)
+                ):
+                    self.relax_all()
 
     def home_all(self, duration_s: float = 0.5) -> None:
         """Move all calibrated channels to their safe home positions."""
@@ -240,6 +270,7 @@ class ServoController:
             except OSError as e:
                 logger.warning(f"I2C error setting servo {name} (ch{cal.channel}): {e}")
             self._last_move_time = time.time()
+            self._is_relaxed = False
         self._save_state_to_disk()
 
     def move_joint(self, name: str, target_angle_deg: float, duration_s: float = 0.25) -> None:
@@ -291,6 +322,7 @@ class ServoController:
                     if other_cal.channel == ch_num:
                         self.current_angles[other_name] = end_val
             self._last_move_time = time.time()
+            self._is_relaxed = False
         self._save_state_to_disk()
 
     def relax_all(self) -> None:
@@ -301,11 +333,17 @@ class ServoController:
                     self.driver.release_channel(cal.channel)
                 except OSError as e:
                     logger.warning(f"I2C error relaxing servo {name} (ch{cal.channel}): {e}")
+            self._is_relaxed = True
             logger.debug("All servo channels relaxed.")
 
     def shutdown(self) -> None:
         """Stop controller and park servos."""
         self._running = False
+        if self._thread is not None and self._thread.is_alive():
+            try:
+                self._thread.join(timeout=1.0)
+            except Exception:
+                pass
         self.home_all(duration_s=0.3)
         time.sleep(0.3)
         self.relax_all()

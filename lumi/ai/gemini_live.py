@@ -8,11 +8,11 @@ import json
 import os
 import threading
 import time
-from typing import Any, Optional
-
-import cv2
-
-from ..audio.mic import MicInterface
+try:
+    import cv2
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
 from ..audio.speaker import SpeakerInterface
 from ..core.event_bus import EventBus
 from ..core.logger import get_logger
@@ -71,6 +71,7 @@ class GeminiLiveClient:
         
         self._last_video_send = 0.0
         self._last_speech_motion_time = 0.0
+        self.barge_in_energy_threshold = float(os.getenv("LUMI_BARGE_IN_THRESHOLD", "2200.0"))
 
     def start(self) -> None:
         if self._running: return
@@ -139,6 +140,8 @@ class GeminiLiveClient:
                 if not self._running:
                     break
                 logger.warning(f"Gemini connection dropped: {e}. Reconnecting...")
+                if self.eyes and hasattr(self.eyes, "set_expression"):
+                    self.eyes.set_expression("thinking")
                 try:
                     await asyncio.sleep(5.0)
                 except asyncio.CancelledError:
@@ -232,6 +235,20 @@ class GeminiLiveClient:
             return True
         return False
 
+    def _compute_chunk_rms(self, chunk: bytes) -> float:
+        """Calculate RMS amplitude of 16-bit PCM mono audio chunk."""
+        if not chunk or len(chunk) < 2:
+            return 0.0
+        import struct
+        import math
+        count = len(chunk) // 2
+        try:
+            shorts = struct.unpack(f"<{count}h", chunk[:count * 2])
+            sum_sq = sum(s * s for s in shorts)
+            return math.sqrt(sum_sq / count)
+        except Exception:
+            return 0.0
+
     def push_audio_chunk(self, chunk: bytes) -> None:
         if not hasattr(self, "_audio_queue") or not self._audio_queue:
             return
@@ -240,9 +257,26 @@ class GeminiLiveClient:
         if not self._loop or not self._loop.is_running():
             return
             
-        # Software AEC (Echo Prevention): Drop mic chunks while speaker is playing
-        if time.time() < getattr(self, "_speaker_active_until", 0):
-            return
+        now = time.time()
+        speaker_active_until = getattr(self, "_speaker_active_until", 0.0)
+
+        # Software AEC with Intelligent Barge-in:
+        if now < speaker_active_until:
+            rms = self._compute_chunk_rms(chunk)
+            if rms >= self.barge_in_energy_threshold:
+                logger.info(
+                    f"🎤 User barge-in detected (RMS={rms:.1f} >= {self.barge_in_energy_threshold:.1f})! Halting speaker immediately."
+                )
+                self._speaker_active_until = 0.0
+                if self.speaker and hasattr(self.speaker, "stop"):
+                    self.speaker.stop()
+                if self.eyes and hasattr(self.eyes, "set_expression"):
+                    self.eyes.set_expression("curious")
+                if self.gestures and hasattr(self.gestures, "idle_pose"):
+                    self.gestures.play_async(self.gestures.idle_pose, name="barge_in_reset")
+            else:
+                # Suppress speaker audio bleed during robot speech
+                return
             
         try:
             self._loop.call_soon_threadsafe(self._audio_queue.put_nowait, chunk)
@@ -322,6 +356,8 @@ class GeminiLiveClient:
                     if "setupComplete" in data:
                         logger.info("Gemini Live session successfully established and ready!")
                         self._is_ready = True
+                        if self.eyes and hasattr(self.eyes, "set_expression"):
+                            self.eyes.set_expression("happy")
 
                     # Server error message
                     if "error" in data:
@@ -369,6 +405,11 @@ class GeminiLiveClient:
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
+                            self._speaker_active_until = 0.0
+                            if self.speaker and hasattr(self.speaker, "stop"):
+                                self.speaker.stop()
+                            if self.eyes and hasattr(self.eyes, "set_expression"):
+                                self.eyes.set_expression("curious")
                             if self.gestures and hasattr(self.gestures, "idle_pose"):
                                 self.gestures.play_async(self.gestures.idle_pose, name="interrupted_reset")
                             
@@ -416,8 +457,15 @@ class GeminiLiveClient:
                                 logger.info(f"Gemini requested tool: {name}")
                                 try:
                                     tool_func = self.tools.tools[name]
-                                    result = tool_func(**args)
+                                    result = await asyncio.wait_for(
+                                        asyncio.to_thread(tool_func, **args),
+                                        timeout=12.0
+                                    )
+                                except asyncio.TimeoutError:
+                                    logger.error(f"Tool '{name}' execution timed out after 12.0s.")
+                                    result = f"Error: Tool '{name}' execution timed out."
                                 except Exception as e:
+                                    logger.error(f"Tool '{name}' execution error: {e}")
                                     result = f"Error: {e}"
                             else:
                                 logger.warning(f"Gemini requested unknown tool: {name}")

@@ -18,8 +18,8 @@ class HeadController:
     # Safe kinematic limits ensuring servo never hits physical stops or exceeds rotation limits
     SAFE_MIN_PAN: float = -70.0   # Turn right max
     SAFE_MAX_PAN: float = 70.0    # Turn left max
-    SAFE_MIN_TILT: float = -12.0  # Tilt up max
-    SAFE_MAX_TILT: float = 12.0   # Tilt down max
+    SAFE_MIN_TILT: float = -15.0  # Tilt up max
+    SAFE_MAX_TILT: float = 15.0   # Tilt down max
 
     def __init__(self, controller: ServoController) -> None:
         self.controller = controller

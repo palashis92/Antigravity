@@ -20,6 +20,7 @@ import tests.test_vision as tv
 import tests.test_anjum_mode as tanjum
 import tests.test_audio as taud
 import tests.test_identity_pipeline as tip
+import tests.test_improvements as timp
 
 
 class DummyMonkeypatch:
@@ -107,6 +108,11 @@ def main():
         ("test_speaker_identifier_lifecycle", taud.test_speaker_identifier_lifecycle, ()),
         ("test_speaker_identifier_cosine_similarity", taud.test_speaker_identifier_cosine_similarity, ()),
         ("test_doa_body_orientation_mapping", taud.test_doa_body_orientation_mapping, ()),
+        # LUMI System Improvements (Auto-Relax, Speaker Stop, Barge-In, Async Tools)
+        ("test_servo_auto_relax_lifecycle", timp.test_servo_auto_relax_lifecycle, ()),
+        ("test_speaker_interface_stop_stream_and_shutdown", timp.test_speaker_interface_stop_stream_and_shutdown, ()),
+        ("test_gemini_live_barge_in_logic", timp.test_gemini_live_barge_in_logic, ()),
+        ("test_gemini_live_async_tool_execution", timp.test_gemini_live_async_tool_execution, ()),
     ]
 
     for name, fn, args in tests_to_run:

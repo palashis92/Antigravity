@@ -195,7 +195,7 @@ class LumiApplication:
         self.event_bus.stop()
         self.camera.stop()
         self.mic.stop()
-        self.speaker.stop()
+        self.speaker.shutdown()
         self.eye_renderer.stop()
         self.servo_controller.shutdown()
 
