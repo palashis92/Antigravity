@@ -111,7 +111,7 @@ def main():
         # LUMI System Improvements (Auto-Relax, Speaker Stop, Barge-In, Async Tools)
         ("test_servo_auto_relax_lifecycle", timp.test_servo_auto_relax_lifecycle, ()),
         ("test_speaker_interface_stop_stream_and_shutdown", timp.test_speaker_interface_stop_stream_and_shutdown, ()),
-        ("test_gemini_live_barge_in_logic", timp.test_gemini_live_barge_in_logic, ()),
+        ("test_gemini_live_software_aec", timp.test_gemini_live_software_aec, ()),
         ("test_gemini_live_async_tool_execution", timp.test_gemini_live_async_tool_execution, ()),
     ]
 

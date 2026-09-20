@@ -108,7 +108,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                     proc.stdin.write(audio_bytes)
                     proc.stdin.flush()
             except Exception as e:
-                if isinstance(e, (BrokenPipeError, OSError)):
+                if isinstance(e, (BrokenPipeError, OSError, ValueError)):
                     logger.debug(f"Audio stream worker pipe closed: {e}")
                 else:
                     logger.warning(f"Audio stream worker error: {e}")

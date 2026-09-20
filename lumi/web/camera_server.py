@@ -238,6 +238,7 @@ class CameraFeedServer:
     def _run_server(self) -> None:
         """Run the HTTP server."""
         try:
+            HTTPServer.allow_reuse_address = True
             self._server = HTTPServer(("0.0.0.0", self.port), _MJPEGHandler)
             self._server.serve_forever()
         except Exception as e:

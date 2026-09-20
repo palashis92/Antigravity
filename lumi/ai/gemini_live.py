@@ -71,7 +71,6 @@ class GeminiLiveClient:
         
         self._last_video_send = 0.0
         self._last_speech_motion_time = 0.0
-        self.barge_in_energy_threshold = float(os.getenv("LUMI_BARGE_IN_THRESHOLD", "2200.0"))
 
     def start(self) -> None:
         if self._running: return
@@ -235,20 +234,6 @@ class GeminiLiveClient:
             return True
         return False
 
-    def _compute_chunk_rms(self, chunk: bytes) -> float:
-        """Calculate RMS amplitude of 16-bit PCM mono audio chunk."""
-        if not chunk or len(chunk) < 2:
-            return 0.0
-        import struct
-        import math
-        count = len(chunk) // 2
-        try:
-            shorts = struct.unpack(f"<{count}h", chunk[:count * 2])
-            sum_sq = sum(s * s for s in shorts)
-            return math.sqrt(sum_sq / count)
-        except Exception:
-            return 0.0
-
     def push_audio_chunk(self, chunk: bytes) -> None:
         if not hasattr(self, "_audio_queue") or not self._audio_queue:
             return
@@ -257,26 +242,9 @@ class GeminiLiveClient:
         if not self._loop or not self._loop.is_running():
             return
             
-        now = time.time()
-        speaker_active_until = getattr(self, "_speaker_active_until", 0.0)
-
-        # Software AEC with Intelligent Barge-in:
-        if now < speaker_active_until:
-            rms = self._compute_chunk_rms(chunk)
-            if rms >= self.barge_in_energy_threshold:
-                logger.info(
-                    f"🎤 User barge-in detected (RMS={rms:.1f} >= {self.barge_in_energy_threshold:.1f})! Halting speaker immediately."
-                )
-                self._speaker_active_until = 0.0
-                if self.speaker and hasattr(self.speaker, "stop"):
-                    self.speaker.stop()
-                if self.eyes and hasattr(self.eyes, "set_expression"):
-                    self.eyes.set_expression("curious")
-                if self.gestures and hasattr(self.gestures, "idle_pose"):
-                    self.gestures.play_async(self.gestures.idle_pose, name="barge_in_reset")
-            else:
-                # Suppress speaker audio bleed during robot speech
-                return
+        # Software AEC (Echo Prevention): Drop mic chunks completely while speaker is playing
+        if time.time() < getattr(self, "_speaker_active_until", 0):
+            return
             
         try:
             self._loop.call_soon_threadsafe(self._audio_queue.put_nowait, chunk)
@@ -405,11 +373,6 @@ class GeminiLiveClient:
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
-                            self._speaker_active_until = 0.0
-                            if self.speaker and hasattr(self.speaker, "stop"):
-                                self.speaker.stop()
-                            if self.eyes and hasattr(self.eyes, "set_expression"):
-                                self.eyes.set_expression("curious")
                             if self.gestures and hasattr(self.gestures, "idle_pose"):
                                 self.gestures.play_async(self.gestures.idle_pose, name="interrupted_reset")
                             

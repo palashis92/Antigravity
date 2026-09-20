@@ -59,8 +59,8 @@ def test_speaker_interface_stop_stream_and_shutdown() -> None:
     speaker.shutdown()
 
 
-def test_gemini_live_barge_in_logic() -> None:
-    """Verify Intelligent Barge-in RMS detection and echo suppression in GeminiLiveClient."""
+def test_gemini_live_software_aec() -> None:
+    """Verify Software AEC drops chunks during speech to prevent feedback echo."""
     from lumi.ai.gemini_live import GeminiLiveClient
 
     # Create mock dependencies
@@ -95,31 +95,19 @@ def test_gemini_live_barge_in_logic() -> None:
     time.sleep(0.05)
 
     try:
-        # Create low RMS chunk (amplitude 300) -> bleed
-        low_chunk = struct.pack("<100h", *([300] * 100))
-        low_rms = client._compute_chunk_rms(low_chunk)
-        assert low_rms < 1000.0
+        dummy_chunk = struct.pack("<100h", *([1000] * 100))
 
-        # Create high RMS chunk (amplitude 8000) -> human barge-in
-        high_chunk = struct.pack("<100h", *([8000] * 100))
-        high_rms = client._compute_chunk_rms(high_chunk)
-        assert high_rms > 5000.0
-
-        # Simulate active speaker
+        # 1. When speaker is active, mic chunks should be dropped to prevent echo feedback
         now = time.time()
         client._speaker_active_until = now + 5.0
+        client.push_audio_chunk(dummy_chunk)
+        assert client._audio_queue.empty(), "Mic chunk should be dropped during active speaker to prevent echo"
 
-        # Low chunk should be suppressed (Software AEC)
-        client.push_audio_chunk(low_chunk)
-        assert client._audio_queue.empty(), "Low amplitude chunk should be dropped as speaker bleed"
-        assert client._speaker_active_until > now, "Speaker should still be active"
-
-        # High chunk should trigger barge-in: stop speaker, reset timer, and queue chunk
-        client.push_audio_chunk(high_chunk)
-        assert client._speaker_active_until == 0.0, "Speaker timer should be cleared on barge-in"
-        speaker.stop.assert_called()
+        # 2. When speaker is inactive, mic chunks should be enqueued for Gemini Live
+        client._speaker_active_until = 0.0
+        client.push_audio_chunk(dummy_chunk)
         time.sleep(0.05)
-        assert not client._audio_queue.empty(), "High amplitude barge-in chunk should be enqueued"
+        assert not client._audio_queue.empty(), "Mic chunk should be enqueued when speaker is inactive"
     finally:
         loop.call_soon_threadsafe(loop.stop)
 
@@ -167,8 +155,8 @@ if __name__ == "__main__":
     print("✓ test_servo_auto_relax_lifecycle PASSED")
     test_speaker_interface_stop_stream_and_shutdown()
     print("✓ test_speaker_interface_stop_stream_and_shutdown PASSED")
-    test_gemini_live_barge_in_logic()
-    print("✓ test_gemini_live_barge_in_logic PASSED")
+    test_gemini_live_software_aec()
+    print("✓ test_gemini_live_software_aec PASSED")
     test_gemini_live_async_tool_execution()
     print("✓ test_gemini_live_async_tool_execution PASSED")
     print("All improvement tests passed successfully!")
