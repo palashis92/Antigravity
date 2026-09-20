@@ -116,6 +116,10 @@ def main():
         ("test_learned_rules_store_and_adaptation", timp.test_learned_rules_store_and_adaptation, ()),
         ("test_camera_backend_close_and_face_service_cache", timp.test_camera_backend_close_and_face_service_cache, ()),
         ("test_greeting_cooldown_and_temporal_context", timp.test_greeting_cooldown_and_temporal_context, ()),
+        ("test_memory_turn_recording_and_palash_fallback", timp.test_memory_turn_recording_and_palash_fallback, ()),
+        ("test_tool_memorize_and_recall_palash_identity", timp.test_tool_memorize_and_recall_palash_identity, ()),
+        ("test_spatial_audio_clean_downmix", timp.test_spatial_audio_clean_downmix, ()),
+        ("test_proactive_recall_identity_query", timp.test_proactive_recall_identity_query, ()),
     ]
 
     for name, fn, args in tests_to_run:

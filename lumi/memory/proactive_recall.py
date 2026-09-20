@@ -41,6 +41,15 @@ _RECALL_PATTERNS = [
     re.compile(r"মনে আছে", re.IGNORECASE),       # "Do you remember..."
     re.compile(r"মনে পড়ে", re.IGNORECASE),       # "Do you recall..."
     re.compile(r"আগে বলেছিলাম", re.IGNORECASE),  # "I told you before..."
+    re.compile(r"আমাকে চেন(?:ো|েন|িস)?", re.IGNORECASE),  # "Do you know me?"
+    re.compile(r"চিনতে পার(?:ো|েন|িস|ছো)?", re.IGNORECASE), # "Can you recognize me?"
+    re.compile(r"আমার সম্পর্কে", re.IGNORECASE),  # "About me..."
+    re.compile(r"আমার সম্বন্ধে", re.IGNORECASE),
+    re.compile(r"আমি কে", re.IGNORECASE),         # "Who am I?"
+    re.compile(r"আমার নাম", re.IGNORECASE),       # "My name..."
+    re.compile(r"do you know me", re.IGNORECASE),
+    re.compile(r"who am i", re.IGNORECASE),
+    re.compile(r"what do you know about me", re.IGNORECASE),
     re.compile(r"last time", re.IGNORECASE),
     re.compile(r"remember when", re.IGNORECASE),
     re.compile(r"did I tell you", re.IGNORECASE),
@@ -138,14 +147,38 @@ class ProactiveRecallEngine:
                 # 5. Fetch relevant facts
                 all_facts = []
 
-                # 5a. Facts about mentioned people
+                # 5a. Identity check: if user is asking about themselves / recognition
+                is_identity_query = bool(re.search(
+                    r"(?:আমাকে চেন|চিনতে পার|আমার সম্পর্কে|আমার সম্বন্ধে|আমি কে|আমার নাম|do you know me|who am i|about me)",
+                    user_text,
+                    re.IGNORECASE
+                ))
+                if is_identity_query:
+                    owner = self.memory.find_person_by_name("Palash")
+                    if owner:
+                        if not any(p.id == owner.id for p in mentioned_people):
+                            mentioned_people.append(owner)
+                        from ..memory.models import Fact
+                        owner_profile_fact = Fact(
+                            id=f"profile_{owner.id}",
+                            fact_text=f"The user speaking to you is {owner.name} ({owner.relationship}). Notes: {owner.notes or 'Owner and creator of LUMI'}.",
+                            category="identity"
+                        )
+                        owner_profile_fact._mentioned_person = owner.name
+                        all_facts.append(owner_profile_fact)
+                        owner_facts = self.memory.recall_facts(person_id=owner.id)
+                        for f in owner_facts[:5]:
+                            f._mentioned_person = owner.name
+                        all_facts.extend(owner_facts[:5])
+
+                # 5b. Facts about mentioned people
                 for person in mentioned_people:
                     person_facts = self.memory.recall_facts(person_id=person.id)
                     for f in person_facts[:3]:
                         f._mentioned_person = person.name
                     all_facts.extend(person_facts[:3])
 
-                # 5b. Topic-based search
+                # 5c. Topic-based search
                 for topic in topics[:3]:  # Limit to top 3 topics
                     topic_facts = self.memory.recall_facts(search_query=topic)
                     all_facts.extend(topic_facts[:3])

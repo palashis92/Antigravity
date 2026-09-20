@@ -86,6 +86,36 @@ class Mem0CloudEngine:
             logger.warning(f"Mem0 Cloud API Search Error: {e}")
             return ""
 
+    def remember_fact_sync(self, person_id: str, fact: str) -> bool:
+        """Directly adds a factual memory for a person in Mem0 Cloud API."""
+        if not self.api_key:
+            return False
+        with self._lock:
+            try:
+                payload = {
+                    "messages": [
+                        {"role": "user", "content": f"Remember this fact: {fact}"},
+                    ],
+                    "user_id": person_id,
+                }
+                data = json.dumps(payload).encode("utf-8")
+                req = urllib.request.Request(
+                    self.BASE_URL,
+                    data=data,
+                    headers={
+                        "Authorization": f"Token {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    res = json.loads(response.read().decode())
+                    logger.info(f"Mem0 Cloud API direct fact saved for {person_id}: {res}")
+                    return True
+            except Exception as e:
+                logger.error(f"Mem0 Cloud API remember_fact_sync Error: {e}")
+                return False
+
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------

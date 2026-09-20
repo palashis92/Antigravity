@@ -355,14 +355,44 @@ class LumiBrain:
     def _on_turn_complete(self, event: Event) -> None:
         person = self.active_person
         if not person:
-            # No active person identified — don't attribute to anyone
-            return
+            # Default to owner/creator Palash, or the primary registered person
+            person = self.memory.find_person_by_name("Palash")
+            if not person:
+                people = self.memory.list_people()
+                person = people[0] if people else None
+
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
+        person_id = person.id if person else None
 
-        # --- Person-mention detection (Phase 2, Change 5) ---
-        # If the user mentions another known person by name, auto-inject their facts
+        # 1. Record conversation turn to SQLite conversations table
         if u_text:
+            try:
+                self.memory.record_turn(
+                    speaker="user",
+                    text=u_text,
+                    person_id=person_id,
+                    language="bn",
+                    intent="chat",
+                )
+            except Exception as e:
+                logger.error(f"Error recording user turn to database: {e}")
+
+        if l_text:
+            try:
+                self.memory.record_turn(
+                    speaker="lumi",
+                    text=l_text,
+                    person_id=person_id,
+                    language="bn",
+                    intent="chat",
+                )
+            except Exception as e:
+                logger.error(f"Error recording lumi turn to database: {e}")
+
+        # 2. Person-mention detection (Phase 2, Change 5)
+        # If the user mentions another known person by name, auto-inject their facts
+        if u_text and person:
             try:
                 for p in self.memory.list_people():
                     if p.id == person.id:
@@ -390,13 +420,17 @@ class LumiBrain:
             except Exception as e:
                 logger.debug(f"Person-mention detection error: {e}")
 
-        if u_text or l_text:
-            self.mem0.process_conversation_turn_async(
-                person_id=person.id,
-                person_name=person.name,
-                user_text=u_text,
-                ai_text=l_text
-            )
+        # 3. Asynchronously extract semantic facts via Mem0
+        if (u_text or l_text) and person:
+            try:
+                self.mem0.process_conversation_turn_async(
+                    person_id=person.id,
+                    person_name=person.name,
+                    user_text=u_text,
+                    ai_text=l_text
+                )
+            except Exception as e:
+                logger.error(f"Error in Mem0 async turn processing: {e}")
 
     def _on_idle_wander(self, event: Event) -> None:
         if self.state.current_state == BehaviorState.IDLE:
@@ -517,7 +551,7 @@ class LumiBrain:
 
             # 1. Push audio to Gemini Live (with proximity filtering)
             num_faces = len(getattr(self, '_last_detected_faces', []))
-            is_overlap = (num_faces > 1) or getattr(self, '_acoustic_overlap_active', False)
+            is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
             if self.proximity_filter.should_pass(chunk, is_overlap):
                 if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
                     self.realtime_voice.push_audio_chunk(chunk)
@@ -1155,17 +1189,30 @@ class LumiBrain:
 
     def _tool_memorize_fact(self, fact: str, person_name: Optional[str] = None) -> str:
         """Autonomously remember a semantic fact."""
-        person_id = None
+        person = None
         if person_name:
             person = self.memory.find_person_by_name(person_name)
-            if person:
-                person_id = person.id
-            else:
-                return f"Person '{person_name}' not found. Cannot attach fact to them."
         
+        # Fallback to active person or owner Palash
+        if not person:
+            person = getattr(self, "active_person", None) or self.memory.find_person_by_name("Palash")
+            if not person:
+                people = self.memory.list_people()
+                person = people[0] if people else None
+
+        person_id = person.id if person else None
         saved_fact = self.memory.remember_fact(fact_text=fact, person_id=person_id)
+
+        # Also sync to Mem0 Cloud / local Mem0
+        if person_id and hasattr(self, "mem0") and hasattr(self.mem0, "remember_fact_sync"):
+            try:
+                self.mem0.remember_fact_sync(person_id=person_id, fact=fact)
+            except Exception as e:
+                logger.warning(f"Failed to sync fact to Mem0: {e}")
+
         if saved_fact:
-            return f"Fact memorized successfully: '{fact}'"
+            for_name = f" for {person.name}" if person else ""
+            return f"Fact memorized successfully{for_name}: '{fact}'"
         return "Failed to memorize fact due to privacy consent settings."
 
     def _tool_recall_facts(self, search_query: str, person_name: Optional[str] = None) -> str:
@@ -1188,10 +1235,17 @@ class LumiBrain:
                 person_id = person.id
 
         # 1. Check local SQLite memory (prefer FTS5 if available, fallback to LIKE)
+        local_facts = []
         if hasattr(self.memory, "recall_facts_fts"):
             local_facts = self.memory.recall_facts_fts(search_query, person_id=person_id, limit=10)
-        else:
+        if not local_facts:
             local_facts = self.memory.recall_facts(person_id=person_id, search_query=search_query)
+        # If still no facts found and this is a general/identity query, retrieve all facts for this person
+        if not local_facts and person_id:
+            local_facts = self.memory.recall_facts(person_id=person_id)
+        # Also include unattributed general facts if none found
+        if not local_facts:
+            local_facts = self.memory.recall_facts(person_id=None, search_query=search_query)
         
         # 2. Check Mem0 Cloud (if active)
         cloud_facts_text = ""
@@ -1217,6 +1271,13 @@ class LumiBrain:
         # 4. Deduplicate local results
         seen_texts: set = set()
         unique_results: list = []
+
+        # Always include the person's identity profile information if known!
+        if person:
+            profile_line = f"Identity Profile: {person.name} is your {person.relationship}. Notes: {person.notes or 'Creator and primary user of LUMI.'}"
+            seen_texts.add(" ".join(profile_line.lower().split()))
+            unique_results.append(f"- {profile_line}")
+
         for f, score in top_facts:
             normalized = " ".join(f.fact_text.lower().split())
             is_dup = False

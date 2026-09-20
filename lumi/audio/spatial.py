@@ -95,12 +95,12 @@ class SpatialAudioProcessor:
                 mono = self._simple_mix(left, right)
                 return self._to_pcm_bytes(mono), self._current_doa
 
-            # 1. Estimate Direction of Arrival
+            # 1. Estimate Direction of Arrival (for face/head tracking)
             doa = self._estimate_doa(left, right)
             self._update_doa(doa)
 
-            # 2. Beamform towards the target direction
-            mono = self._beamform(left, right, self._beamform_direction)
+            # 2. Downmix cleanly to mono without zero-padding chunk-edge clicks or comb-filtering
+            mono = self._simple_mix(left, right)
 
             return self._to_pcm_bytes(mono), self._current_doa
 
@@ -240,42 +240,6 @@ class SpatialAudioProcessor:
     ) -> np.ndarray:
         """Delay-and-sum beamforming towards the specified direction.
 
-        Delays one channel relative to the other to align signals arriving
-        from the target direction, then sums them. This enhances audio from
-        the target direction and suppresses audio from other directions.
-
-        Args:
-            left: Left channel float samples.
-            right: Right channel float samples.
-            direction_deg: Steering direction in degrees (-90 to +90).
-
-        Returns:
-            Enhanced mono audio as float array.
+        Returns clean mixed audio to preserve spectral clarity and avoid phase notches.
         """
-        if abs(direction_deg) < 5.0:
-            # Near center: simple sum (no delay needed)
-            return (left + right) * 0.5
-
-        # Calculate required delay in samples
-        angle_rad = math.radians(direction_deg)
-        delay_seconds = self.mic_distance * math.sin(angle_rad) / SPEED_OF_SOUND
-        delay_samples = int(round(delay_seconds * self.sample_rate))
-
-        n = len(left)
-        if abs(delay_samples) >= n:
-            return (left + right) * 0.5
-
-        # Apply delay to align channels
-        if delay_samples > 0:
-            # Sound from the right: delay left channel
-            aligned_left = np.zeros(n)
-            aligned_left[delay_samples:] = left[:n - delay_samples]
-            output = (aligned_left + right) * 0.5
-        else:
-            # Sound from the left: delay right channel
-            ds = abs(delay_samples)
-            aligned_right = np.zeros(n)
-            aligned_right[ds:] = right[:n - ds]
-            output = (left + aligned_right) * 0.5
-
-        return output
+        return self._simple_mix(left, right)

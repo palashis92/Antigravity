@@ -65,6 +65,36 @@ class LumiMem0Engine:
         )
         thread.start()
 
+    def remember_fact_sync(self, person_id: str, fact: str) -> bool:
+        """Directly stores a factual memory in SQLite memory manager."""
+        try:
+            saved = self.memory.remember_fact(fact_text=fact, person_id=person_id)
+            return saved is not None
+        except Exception as e:
+            logger.error(f"LumiMem0 Engine remember_fact_sync Error: {e}")
+            return False
+
+    def recall_facts_sync(
+        self,
+        person_id: str,
+        query: str = "What are the most important facts about this user?",
+    ) -> str:
+        """Recalls relevant memories from local memory manager."""
+        try:
+            facts = []
+            if query and query != "What are the most important facts about this user?":
+                if hasattr(self.memory, "recall_facts_fts"):
+                    facts = self.memory.recall_facts_fts(query, person_id=person_id, limit=5)
+                if not facts:
+                    facts = self.memory.recall_facts(person_id=person_id, search_query=query)
+            if not facts:
+                facts = self.memory.recall_facts(person_id=person_id)
+            memories = [f.fact_text for f in facts if f.fact_text]
+            return ", ".join(memories[:5]) if memories else ""
+        except Exception as e:
+            logger.warning(f"LumiMem0 Engine recall_facts_sync Error: {e}")
+            return ""
+
     def _extract_memory_sync(
         self, person_id: str, person_name: str, user_text: str, ai_text: str
     ) -> None:

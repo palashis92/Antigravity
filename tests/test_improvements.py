@@ -233,6 +233,137 @@ def test_greeting_cooldown_and_temporal_context() -> None:
     assert service.should_interact(pid, cooldown_s=3000.0) is False
 
 
+def test_memory_turn_recording_and_palash_fallback() -> None:
+    """Verify conversations are saved to database with owner fallback when camera has no face."""
+    from lumi.core.event_bus import Event
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    palash = mem.remember_person("Palash", relationship="owner", notes="Owner and creator of LUMI.")
+
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.memory = mem
+    brain.active_person = None  # Camera has no active face
+    brain.realtime_voice = MagicMock()
+    brain.mem0 = MagicMock()
+
+    # Fire turn complete event
+    event = Event(topic="conversation.turn_complete", data={"user": "আমার নাম পলাশ", "lumi": "হ্যাঁ পলাশ, আমি মনে রেখেছি!"})
+    brain._on_turn_complete(event)
+
+    # Verify turns are recorded in SQLite
+    turns = mem.get_recent_turns(limit=10)
+    assert len(turns) == 2
+    assert turns[0].speaker == "user"
+    assert turns[0].person_id == palash.id
+    assert turns[0].text == "আমার নাম পলাশ"
+    assert turns[1].speaker == "lumi"
+    assert turns[1].person_id == palash.id
+
+    # Verify Mem0 async processing was called with Palash
+    brain.mem0.process_conversation_turn_async.assert_called_once_with(
+        person_id=palash.id,
+        person_name="Palash",
+        user_text="আমার নাম পলাশ",
+        ai_text="হ্যাঁ পলাশ, আমি মনে রেখেছি!"
+    )
+
+
+def test_tool_memorize_and_recall_palash_identity() -> None:
+    """Verify _tool_memorize_fact attaches to Palash and _tool_recall_facts always includes profile."""
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    palash = mem.remember_person("Palash", relationship="owner", notes="Owner and creator of LUMI.")
+
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.memory = mem
+    brain.active_person = None
+    brain.mem0 = MagicMock()
+    brain.mem0.remember_fact_sync.return_value = True
+    brain.mem0.recall_facts_sync.return_value = ""
+
+    # Memorize fact without explicit person_name
+    res = brain._tool_memorize_fact(fact="Palash prefers dark roast coffee")
+    assert "memorized successfully for Palash" in res
+
+    # Verify fact in SQLite
+    facts = mem.recall_facts(person_id=palash.id)
+    assert len(facts) == 1
+    assert "dark roast coffee" in facts[0].fact_text
+
+    # Recall facts with generic question
+    recall_res = brain._tool_recall_facts(search_query="who is talking to you")
+    assert "Identity Profile: Palash is your owner" in recall_res
+    assert "dark roast coffee" in recall_res
+
+
+def test_spatial_audio_clean_downmix() -> None:
+    """Verify spatial audio processor returns clean mono audio without zero-padded clicks."""
+    try:
+        from lumi.audio.spatial import SpatialAudioProcessor
+        import numpy as np
+    except ImportError:
+        return  # Skip test on machines without numpy installed
+
+    proc = SpatialAudioProcessor(mic_distance=0.058, sample_rate=16000)
+
+    # Generate 100ms of stereo PCM (440 Hz tone on L, 440 Hz tone on R)
+    t = np.linspace(0, 0.1, 1600, endpoint=False)
+    tone_l = (np.sin(2 * np.pi * 440 * t) * 10000).astype(np.int16)
+    tone_r = (np.sin(2 * np.pi * 440 * t) * 10000).astype(np.int16)
+    stereo_interleaved = np.empty(3200, dtype=np.int16)
+    stereo_interleaved[0::2] = tone_l
+    stereo_interleaved[1::2] = tone_r
+    stereo_bytes = stereo_interleaved.tobytes()
+
+    mono_bytes, doa = proc.process_stereo_chunk(stereo_bytes)
+    assert len(mono_bytes) == 1600 * 2  # 1600 samples, 2 bytes/sample
+    mono_samples = np.frombuffer(mono_bytes, dtype=np.int16)
+
+    # First samples should NOT be all zeros (no zero-gap clicks at chunk boundary)
+    assert not np.all(mono_samples[:10] == 0)
+    assert abs(doa) <= 90.0
+
+
+def test_proactive_recall_identity_query() -> None:
+    """Verify proactive recall engine recognizes 'আমাকে চেনো' and injects Palash identity."""
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+    from lumi.memory.proactive_recall import ProactiveRecallEngine, _RECALL_PATTERNS
+
+    # 1. Pattern matching check
+    patterns_match = any(p.search("তুমি কি আমাকে চেনো?") for p in _RECALL_PATTERNS)
+    assert patterns_match is True
+
+    patterns_match_about = any(p.search("আমার সম্পর্কে কিছু জানো?") for p in _RECALL_PATTERNS)
+    assert patterns_match_about is True
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mem.remember_person("Palash", relationship="owner", notes="Owner and creator of LUMI.")
+    mem.remember_fact("Palash is building autonomous AI robots.", person_id="test_id")
+
+    voice_mock = MagicMock()
+    bus_mock = MagicMock()
+    mem0_mock = MagicMock()
+    mem0_mock.recall_facts_sync.return_value = ""
+
+    engine = ProactiveRecallEngine(mem, mem0_mock, voice_mock, bus_mock)
+    engine._process_utterance("তুমি কি আমাকে চেনো? আমার সম্পর্কে কিছু জানো?", trigger_time=time.time())
+
+    assert voice_mock.inject_context.called
+    injected = voice_mock.inject_context.call_args[0][0]
+    assert "Palash" in injected
+    assert "owner" in injected
+
+
 if __name__ == "__main__":
     test_servo_auto_relax_lifecycle()
     print("✓ test_servo_auto_relax_lifecycle PASSED")
@@ -248,4 +379,12 @@ if __name__ == "__main__":
     print("✓ test_camera_backend_close_and_face_service_cache PASSED")
     test_greeting_cooldown_and_temporal_context()
     print("✓ test_greeting_cooldown_and_temporal_context PASSED")
+    test_memory_turn_recording_and_palash_fallback()
+    print("✓ test_memory_turn_recording_and_palash_fallback PASSED")
+    test_tool_memorize_and_recall_palash_identity()
+    print("✓ test_tool_memorize_and_recall_palash_identity PASSED")
+    test_spatial_audio_clean_downmix()
+    print("✓ test_spatial_audio_clean_downmix PASSED")
+    test_proactive_recall_identity_query()
+    print("✓ test_proactive_recall_identity_query PASSED")
     print("All improvement tests passed successfully!")
