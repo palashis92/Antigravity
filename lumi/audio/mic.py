@@ -44,10 +44,9 @@ class SystemMicBackend(MicBackendBase):
         import re
         # Determine the specific card to configure
         card_id = None
-        if "hw:" in self.alsa_device or "plughw:" in self.alsa_device:
-            m = re.search(r'(?:plug)?hw:(\w+)', self.alsa_device)
-            if m:
-                card_id = m.group(1)
+        m = re.search(r'(?:plug)?hw:(\w+)|CARD=(\w+)', self.alsa_device)
+        if m:
+            card_id = m.group(1) or m.group(2)
         
         if card_id is None:
             # Fallback: try cards 0 and 1 only
@@ -101,7 +100,7 @@ class SystemMicBackend(MicBackendBase):
                     parts = line.split(":")
                     if parts and "card" in parts[0].lower():
                         card_num = parts[0].lower().replace("card", "").strip()
-                        self.alsa_device = f"plughw:{card_num},0"
+                        self.alsa_device = f"sysdefault:CARD={card_num}"
                         logger.info(f"Auto-detected ReSpeaker 2-Mics capture device at '{self.alsa_device}'.")
                         return
         except Exception as e:

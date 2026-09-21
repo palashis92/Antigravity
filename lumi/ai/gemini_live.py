@@ -458,10 +458,14 @@ class GeminiLiveClient:
         if not self.is_awake():
             return
             
+        def _safe_put():
+            try:
+                self._audio_queue.put_nowait(chunk)
+            except asyncio.QueueFull:
+                logger.warning("Audio queue full — dropping chunk. Gemini may miss audio.")
+        
         try:
-            self._loop.call_soon_threadsafe(self._audio_queue.put_nowait, chunk)
-        except asyncio.QueueFull:
-            logger.warning("Audio queue full — dropping chunk. Gemini may miss audio.")
+            self._loop.call_soon_threadsafe(_safe_put)
         except RuntimeError:
             pass
 

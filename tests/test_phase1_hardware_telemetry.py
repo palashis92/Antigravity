@@ -51,7 +51,7 @@ def test_speaker_wm8960_detection() -> None:
             args=["aplay", "-l"], returncode=0, stdout=fake_aplay_output, stderr=""
         )
         backend = I2SSpeakerBackend(alsa_device="default")
-        assert backend.alsa_device == "plughw:1,0"
+        assert backend.alsa_device == "sysdefault:CARD=1"
 
 
 def test_mic_wm8960_detection() -> None:
@@ -66,7 +66,7 @@ def test_mic_wm8960_detection() -> None:
             args=["arecord", "-l"], returncode=0, stdout=fake_arecord_output, stderr=""
         )
         backend = SystemMicBackend(alsa_device="default")
-        assert backend.alsa_device == "plughw:1,0"
+        assert backend.alsa_device == "sysdefault:CARD=1"
 
 
 def test_servo_slew_rate_limiter() -> None:

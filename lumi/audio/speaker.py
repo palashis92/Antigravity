@@ -63,10 +63,9 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         """Force ALSA mixer controls on Raspberry Pi (WM8960 / ReSpeaker 2-Mics) to 100% and unmuted."""
         import re
         card_id = None
-        if "hw:" in self.alsa_device or "plughw:" in self.alsa_device:
-            m = re.search(r'(?:plug)?hw:(\w+)', self.alsa_device)
-            if m:
-                card_id = m.group(1)
+        m = re.search(r'(?:plug)?hw:(\w+)|CARD=(\w+)', self.alsa_device)
+        if m:
+            card_id = m.group(1) or m.group(2)
 
         candidate_cards = []
         if card_id:
@@ -220,7 +219,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                     parts = line.split(":")
                     if parts and "card" in parts[0].lower():
                         card_num = parts[0].lower().replace("card", "").strip()
-                        self.alsa_device = f"plughw:{card_num},0"
+                        self.alsa_device = f"sysdefault:CARD={card_num}"
                         logger.info(f"Auto-detected ReSpeaker 2-Mics (WM8960) at ALSA device '{self.alsa_device}'.")
                         return
 
@@ -231,7 +230,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                     parts = line.split(":")
                     if parts and "card" in parts[0].lower():
                         card_num = parts[0].lower().replace("card", "").strip()
-                        self.alsa_device = f"plughw:{card_num},0"
+                        self.alsa_device = f"sysdefault:CARD={card_num}"
                         logger.info(f"Auto-detected MAX98357A at ALSA device '{self.alsa_device}'.")
                         return
         except Exception as e:
