@@ -55,61 +55,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             target=self._stream_worker_loop, daemon=True, name="I2SStreamWorker"
         )
         self._stream_thread.start()
-        self._unmute_and_max_alsa_mixer()
         logger.info(f"Speaker initialized on ALSA device {self.alsa_device}")
-
-    def _unmute_and_max_alsa_mixer(self) -> None:
-        """Force ALSA mixer controls on Raspberry Pi (WM8960 / ReSpeaker 2-Mics) to 100% and unmuted."""
-        import re
-        card_id = None
-        m = re.search(r'(?:plug)?hw:(\w+)|CARD=(\w+)', self.alsa_device)
-        if m:
-            card_id = m.group(1) or m.group(2)
-
-        candidate_cards = []
-        if card_id:
-            candidate_cards.append(card_id)
-        candidate_cards.extend(["1", "0", "seeed-2mic-voicecard", "seeed2micvoicec", "wm8960-soundcard", "wm8960soundcard", "default"])
-        cards = list(dict.fromkeys(candidate_cards))
-
-        controls = ["Playback", "Speaker", "Headphone", "PCM", "Line", "HP DAC", "Line DAC", "Master"]
-        mixer_switches = [
-            "Left Output Mixer PCM",
-            "Right Output Mixer PCM",
-        ]
-
-        for card in cards:
-            for ctrl in controls:
-                for val in ["100%", "127", "unmute"]:
-                    try:
-                        subprocess.run(
-                            ["amixer", "-c", str(card), "sset", ctrl, val],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            check=False,
-                        )
-                    except Exception:
-                        pass
-            for sw in mixer_switches:
-                try:
-                    subprocess.run(
-                        ["amixer", "-c", str(card), "sset", sw, "on"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-                except Exception:
-                    pass
-                try:
-                    subprocess.run(
-                        ["amixer", "-c", str(card), "cset", f"name='{sw} Playback Switch'", "1"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-                except Exception:
-                    pass
-        logger.info(f"Unmuted and configured ALSA mixer controls for candidate card(s): {cards[:3]}")
 
     def _stream_worker_loop(self) -> None:
         """Background worker thread feeding streaming audio chunks to a persistent aplay process."""
@@ -202,38 +148,6 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             except Exception: pass
             proc = None
             self._stream_proc = None
-
-    def _detect_alsa_device(self) -> None:
-        """Find the ReSpeaker 2-Mics (WM8960) or MAX98357A card index automatically if available."""
-        if self.alsa_device != "default":
-            return
-        try:
-            res = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
-            lines = res.stdout.splitlines()
-
-            # Priority 1: Check for ReSpeaker 2-Mics Pi HAT (WM8960 / seeed)
-            for line in lines:
-                lower = line.lower()
-                if "seeed" in lower or "wm8960" in lower or "voicecard" in lower:
-                    parts = line.split(":")
-                    if parts and "card" in parts[0].lower():
-                        card_num = parts[0].lower().replace("card", "").strip()
-                        self.alsa_device = f"sysdefault:CARD={card_num}"
-                        logger.info(f"Auto-detected ReSpeaker 2-Mics (WM8960) at ALSA device '{self.alsa_device}'.")
-                        return
-
-            # Priority 2: Check for MAX98357A I2S DAC
-            for line in lines:
-                lower = line.lower()
-                if "max98357a" in lower or "i2s" in lower:
-                    parts = line.split(":")
-                    if parts and "card" in parts[0].lower():
-                        card_num = parts[0].lower().replace("card", "").strip()
-                        self.alsa_device = f"sysdefault:CARD={card_num}"
-                        logger.info(f"Auto-detected MAX98357A at ALSA device '{self.alsa_device}'.")
-                        return
-        except Exception as e:
-            logger.debug(f"ALSA device auto-detection error: {e}")
 
     def _convert_to_clean_wav(self, input_path: str) -> str:
         """Convert MP3/compressed audio to 16-bit 44.1kHz Stereo PCM WAV for clean I2S DAC output."""

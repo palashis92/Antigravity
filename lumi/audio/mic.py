@@ -32,78 +32,7 @@ class SystemMicBackend(MicBackendBase):
         self._mono_queue: queue.Queue = queue.Queue(maxsize=50)  # Processed mono
         self._thread: Optional[threading.Thread] = None
         self._spatial = None
-        self._unmute_capture_mixer()
         self._init_spatial()
-
-    def _unmute_capture_mixer(self) -> None:
-        """Force ALSA capture mixer controls on Raspberry Pi (WM8960 / ReSpeaker 2-Mics) to 100% and unmuted.
-        
-        Uses the already-detected card from _detect_alsa_device() to minimize subprocess calls.
-        """
-        import re
-        # Determine the specific card to configure
-        card_id = None
-        m = re.search(r'(?:plug)?hw:(\w+)|CARD=(\w+)', self.alsa_device)
-        if m:
-            card_id = m.group(1) or m.group(2)
-        
-        if card_id is None:
-            # Fallback: try cards 0 and 1 only
-            candidate_cards = ["1", "0"]
-        else:
-            candidate_cards = [card_id]
-
-        # WM8960-specific controls that actually matter
-        commands = []
-        for card in candidate_cards:
-            for ctrl, val in [
-                ("Capture", "100%"),
-                ("Capture", "cap"),
-                ("ADC PCM", "100%"),
-                ("Mic", "100%"),
-                ("Mic", "cap"),
-            ]:
-                commands.append(f"amixer -c {card} sset '{ctrl}' {val} 2>/dev/null")
-            for sw in [
-                "Left Input Mixer Boost",
-                "Right Input Mixer Boost",
-                "Left Boost Mixer LINPUT1",
-                "Right Boost Mixer RINPUT1",
-            ]:
-                commands.append(f"amixer -c {card} sset '{sw}' on 2>/dev/null")
-
-        # Run all commands in a single shell invocation
-        if commands:
-            combined = " ; ".join(commands)
-            try:
-                subprocess.run(
-                    ["sh", "-c", combined],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=5.0,
-                    check=False,
-                )
-            except Exception as e:
-                logger.debug(f"ALSA mixer configuration note: {e}")
-        logger.info("ALSA microphone capture mixer configured and unmuted.")
-
-    def _detect_alsa_device(self) -> None:
-        """Find the ReSpeaker 2-Mics Pi HAT capture card automatically if available."""
-        if self.alsa_device != "default":
-            return
-        try:
-            res = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
-            for line in res.stdout.splitlines():
-                lower = line.lower()
-                if "seeed" in lower or "wm8960" in lower or "voicecard" in lower:
-                    parts = line.split(":")
-                    if parts and "card" in parts[0].lower():
-                        card_num = parts[0].lower().replace("card", "").strip()
-                        self.alsa_device = f"sysdefault:CARD={card_num}"
-                        logger.info(f"Auto-detected ReSpeaker 2-Mics capture device at '{self.alsa_device}'.")
-                        return
-        except Exception as e:
-            logger.debug(f"arecord device auto-detection error: {e}")
 
     def _init_spatial(self) -> None:
         """Initialize spatial audio processor (graceful fallback)."""
