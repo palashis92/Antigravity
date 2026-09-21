@@ -32,7 +32,6 @@ class SystemMicBackend(MicBackendBase):
         self._mono_queue: queue.Queue = queue.Queue(maxsize=50)  # Processed mono
         self._thread: Optional[threading.Thread] = None
         self._spatial = None
-        self._detect_alsa_device()
         self._unmute_capture_mixer()
         self._init_spatial()
 

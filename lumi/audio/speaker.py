@@ -51,7 +51,6 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         self._stream_proc: Optional[subprocess.Popen] = None
         self._stream_queue: queue.Queue = queue.Queue()
         self._stream_running = True
-        self._detect_alsa_device()
         self._stream_thread = threading.Thread(
             target=self._stream_worker_loop, daemon=True, name="I2SStreamWorker"
         )
