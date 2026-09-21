@@ -160,8 +160,8 @@ class ProactiveRecallEngine:
                             if p.relationship and p.relationship.lower() == "owner":
                                 owner = p
                                 break
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug(f'Owner persona lookup failed: {e}')
                     if not owner:
                         owner = self.memory.find_person_by_name("Mizan")
                     if not owner:
@@ -345,9 +345,9 @@ class ProactiveRecallEngine:
     @staticmethod
     def _score_by_recency(facts: list) -> list:
         """Score facts by recency: newer facts score higher."""
-        from datetime import datetime
+        from datetime import datetime, timezone
 
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         scored = []
         for f in facts:
             try:

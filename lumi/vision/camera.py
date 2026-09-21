@@ -23,6 +23,8 @@ class PhoneCameraBackend(CameraBackendBase):
         self.stream_url = stream_url
         self._cap: Optional[object] = None
         self._running = False
+        import threading
+        self._cap_lock = threading.Lock()
 
     def start(self) -> bool:
         try:
@@ -46,7 +48,8 @@ class PhoneCameraBackend(CameraBackendBase):
         self._running = False
         if self._cap is not None:
             try:
-                self._cap.release()  # type: ignore
+                with self._cap_lock:
+                    self._cap.release()  # type: ignore
             except Exception:
                 pass
         logger.info("Phone camera backend stopped.")
@@ -58,7 +61,8 @@ class PhoneCameraBackend(CameraBackendBase):
         if not self._running or self._cap is None:
             return None
         try:
-            ret, frame = self._cap.read()  # type: ignore
+            with self._cap_lock:
+                ret, frame = self._cap.read()  # type: ignore
             if ret:
                 return frame
         except Exception as e:
@@ -75,6 +79,8 @@ class USBWebcamBackend(CameraBackendBase):
         self.height = height
         self._cap: Optional[object] = None
         self._running = False
+        import threading
+        self._cap_lock = threading.Lock()
 
     def start(self) -> bool:
         try:
@@ -95,7 +101,8 @@ class USBWebcamBackend(CameraBackendBase):
         self._running = False
         if self._cap is not None:
             try:
-                self._cap.release()  # type: ignore
+                with self._cap_lock:
+                    self._cap.release()  # type: ignore
             except Exception:
                 pass
 
@@ -106,7 +113,8 @@ class USBWebcamBackend(CameraBackendBase):
         if not self._running or self._cap is None:
             return None
         try:
-            ret, frame = self._cap.read()  # type: ignore
+            with self._cap_lock:
+                ret, frame = self._cap.read()  # type: ignore
             return frame if ret else None
         except Exception:
             return None

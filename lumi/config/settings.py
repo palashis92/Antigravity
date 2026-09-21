@@ -123,12 +123,15 @@ def _load_yaml_or_json(path: Path) -> Dict[str, Any]:
             loaded = yaml.safe_load(content)
             if isinstance(loaded, dict):
                 return loaded
-        except Exception:
-            pass
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f'Failed to parse config file: {e}')
     # Fallback to json if formatted or key-value
     try:
         return json.loads(content)
-    except Exception:
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f'Failed to parse config file: {e}')
         return {}
 
 

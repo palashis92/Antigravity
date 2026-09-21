@@ -185,7 +185,10 @@ class SystemMicBackend(MicBackendBase):
                 q.get_nowait()
             except queue.Empty:
                 pass
-            q.put_nowait(data)
+            try:
+                q.put_nowait(data)
+            except queue.Full:
+                pass
 
     def read_chunk(self, chunk_size: int = 1024) -> Optional[bytes]:
         """Read processed mono audio chunk (beamformed if spatial available)."""
@@ -225,6 +228,8 @@ class SystemMicBackend(MicBackendBase):
             except Exception:
                 pass
             self._proc = None
+        if getattr(self, "_thread", None):
+            self._thread.join(timeout=2.0)
         logger.info("System mic backend stopped.")
 
 

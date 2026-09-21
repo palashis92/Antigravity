@@ -197,6 +197,8 @@ class EyeRenderer:
         logger.info(f"Playing procedural animation for {animal}")
 
     def _draw_animal_frame(self, animal: str, elapsed: float):
+        if not _HAS_PIL:
+            return None
         from PIL import Image, ImageDraw
         import math
         try:
@@ -399,6 +401,12 @@ class EyeRenderer:
             try:
                 now = time.time()
                 
+                with self._lock:
+                    target_expr = self.target_expr
+                    is_sleeping = self.is_sleeping
+                    gaze_x = self.gaze_x
+                    gaze_y = self.gaze_y
+                
                 # --- Procedural Animal Override ---
                 if self._active_animal and now < self._active_animal_end:
                     elapsed = now - self._active_animal_start
@@ -441,16 +449,16 @@ class EyeRenderer:
                 # --- Expression Auto-Settle to Neutral ---
                 # If an expressive emotion was set (happy, curious, surprised, thinking),
                 # automatically settle back to neutral after a period of calm.
-                if self.target_expr.name not in ["neutral", "listening", "speaking"] and not self.is_sleeping:
+                if target_expr.name not in ["neutral", "listening", "speaking"] and not is_sleeping:
                     if (now - self._last_expr_set_time) > self._auto_settle_timeout:
-                        self.target_expr = EXPRESSIONS.get("neutral", self.target_expr)
+                        self.target_expr = EXPRESSIONS.get("neutral", target_expr)
 
                 # --- Speaking State Tracking ---
                 if now > self._speaking_until:
                     self._is_speaking = False
 
                 # --- Conversational Micro-Glances (Gaze shifts while speaking) ---
-                if self._is_speaking and not self.is_sleeping:
+                if self._is_speaking and not is_sleeping:
                     if now >= self._next_glance_time:
                         # Dart eyes subtly to the side or up (typical human cognitive glance during speech)
                         self._micro_glance_x = random.choice([-8.0, -5.0, 5.0, 8.0])
@@ -467,21 +475,21 @@ class EyeRenderer:
 
                 # --- Procedural Eyes Logic ---
                 # Process Blinking Logic
-                if not self._is_blinking and not self.is_sleeping and now >= self._next_blink_time:
+                if not self._is_blinking and not is_sleeping and now >= self._next_blink_time:
                     self.trigger_blink()
 
                 # Process Saccades (Micro-jitter)
-                if now >= self._next_saccade_time and not self.is_sleeping:
+                if now >= self._next_saccade_time and not is_sleeping:
                     self._saccade_x = random.uniform(-1.5, 1.5)
                     self._saccade_y = random.uniform(-1.5, 1.5)
                     self._next_saccade_time = now + random.uniform(0.1, 0.5)
-                elif self.is_sleeping:
+                elif is_sleeping:
                     self._saccade_x = 0.0
                     self._saccade_y = 0.0
 
                 # Smooth Gaze Lerp with safety clamping (-35 to +35), factoring in micro-glances
-                effective_gx = self.gaze_x + self._saccade_x + self._micro_glance_x
-                effective_gy = self.gaze_y + self._saccade_y + self._micro_glance_y
+                effective_gx = gaze_x + self._saccade_x + self._micro_glance_x
+                effective_gy = gaze_y + self._saccade_y + self._micro_glance_y
                 target_gx = max(-35.0, min(35.0, effective_gx))
                 target_gy = max(-25.0, min(25.0, effective_gy))
                 self._smooth_gaze_x += (target_gx - self._smooth_gaze_x) * 0.35
@@ -489,11 +497,11 @@ class EyeRenderer:
 
                 # Subtle pupil breathing pulse while speaking
                 breathe_delta = 0.0
-                if self._is_speaking and not self.is_sleeping:
+                if self._is_speaking and not is_sleeping:
                     breathe_delta = math.sin(now * 3.5) * 1.5
 
                 blink_cover = 0.0
-                if self.is_sleeping:
+                if is_sleeping:
                     blink_cover = 1.0
                 elif self._is_blinking:
                     elapsed = now - self._blink_start_time

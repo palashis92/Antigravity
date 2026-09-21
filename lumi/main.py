@@ -193,8 +193,8 @@ class LumiApplication:
         if hasattr(self, "camera_server") and self.camera_server:
             try:
                 self.camera_server.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f'Failed to stop camera server: {e}')
         self.brain.stop()
         self.brain.reminders.stop()
         self.event_bus.stop()
@@ -314,7 +314,7 @@ def main() -> None:
             app.brain.behavior.tick_idle()
             time.sleep(0.5)
     except KeyboardInterrupt:
-        handle_sigint(signal.SIGINT, None)
+        handle_shutdown_signal(signal.SIGINT, None)
 
 
 if __name__ == "__main__":

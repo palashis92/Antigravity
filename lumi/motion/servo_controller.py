@@ -345,7 +345,6 @@ class ServoController:
             except Exception:
                 pass
         self.home_all(duration_s=0.3)
-        time.sleep(0.3)
         self.relax_all()
         self.driver.shutdown()
         logger.info("ServoController shut down cleanly.")

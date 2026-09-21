@@ -26,19 +26,21 @@ class GestureManager:
         self.servo = servo_controller
         self.head = head
         self.arms = arms
+        self._gesture_lock = threading.Lock()
         self._current_gesture_thread: Optional[threading.Thread] = None
         self._last_gesture_times: Dict[str, float] = {}
         self._last_speech_anim_time: float = 0.0
 
     def play_async(self, gesture_fn: Callable[[], None], name: str = "gesture") -> None:
         """Run a gesture choreography in a dedicated background thread."""
-        if self._current_gesture_thread and self._current_gesture_thread.is_alive():
-            logger.debug(f"Interrupting/ignoring overlapping gesture request for '{name}'.")
-            return
+        with self._gesture_lock:
+            if self._current_gesture_thread and self._current_gesture_thread.is_alive():
+                logger.debug(f"Interrupting/ignoring overlapping gesture request for '{name}'.")
+                return
 
-        t = threading.Thread(target=gesture_fn, name=f"LumiGesture-{name}", daemon=True)
-        self._current_gesture_thread = t
-        t.start()
+            t = threading.Thread(target=gesture_fn, name=f"LumiGesture-{name}", daemon=True)
+            self._current_gesture_thread = t
+            t.start()
 
     @property
     def is_playing(self) -> bool:

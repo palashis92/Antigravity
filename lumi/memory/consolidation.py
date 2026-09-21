@@ -12,7 +12,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Dict, List, Set
 
 from ..core.logger import get_logger
@@ -47,6 +47,7 @@ class MemoryConsolidator:
     def __init__(self, memory: MemoryManager) -> None:
         self.memory = memory
         self._running = False
+        self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -65,6 +66,7 @@ class MemoryConsolidator:
     def stop(self) -> None:
         """Stop the consolidation daemon."""
         self._running = False
+        self._stop_event.set()
         if self._thread:
             self._thread.join(timeout=2.0)
         logger.info("MemoryConsolidator daemon stopped.")
@@ -75,11 +77,10 @@ class MemoryConsolidator:
         self.run_consolidation()
 
         while self._running:
-            # Sleep in small increments so we can stop quickly
-            for _ in range(int(self.INTERVAL_SECONDS / 10)):
-                if not self._running:
-                    return
-                time.sleep(10)
+            if self._stop_event.wait(timeout=self.INTERVAL_SECONDS):
+                break
+            if not self._running:
+                break
             self.run_consolidation()
 
     def run_consolidation(self) -> Dict[str, int]:
@@ -172,7 +173,7 @@ class MemoryConsolidator:
 
     def _apply_staleness_decay(self, facts: List) -> int:
         """Reduce confidence of facts older than STALENESS_THRESHOLD_DAYS."""
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         decayed = 0
 
         for f in facts:

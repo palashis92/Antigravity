@@ -312,9 +312,9 @@ class MeetingManager:
         if target.analysis and not user_query:
             return target.analysis
 
-        transcript_text = target.to_transcript_text()
-        # Copy participants set to avoid RuntimeError from concurrent add_utterance
+        # Copy participants set and transcript to avoid RuntimeError from concurrent add_utterance
         with self._lock:
+            transcript_text = target.to_transcript_text()
             participants_snapshot = set(target.participants)
         participants_str = ", ".join(participants_snapshot) if participants_snapshot else "অনির্দিষ্ট"
         duration_min = round(target.duration_sec / 60.0, 1) if target.duration_sec else "চলমান"

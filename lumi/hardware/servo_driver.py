@@ -98,13 +98,13 @@ class PCA9685ServoDriver(ServoDriverBase):
         if self._is_hardware and self._pca is not None:
             try:
                 self._pca.channels[channel].duty_cycle = 0  # type: ignore
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'PCA9685 release channel error: {e}')
 
     def shutdown(self) -> None:
         if self._is_hardware and self._pca is not None:
             try:
                 self._pca.deinit()  # type: ignore
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'PCA9685 shutdown error: {e}')
         logger.info("PCA9685 driver shutdown complete.")

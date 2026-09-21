@@ -242,10 +242,13 @@ class MemoryManager:
         """Permanently delete a person and all associated facts (Right to be Forgotten)."""
         person = self.get_person(person_id)
         name = person.name if person else person_id
-        self.db.execute_write("DELETE FROM facts WHERE person_id = ?", (person_id,))
-        self.db.execute_write("DELETE FROM reminders WHERE person_id = ?", (person_id,))
-        self.db.execute_write("DELETE FROM conversations WHERE person_id = ?", (person_id,))
-        affected = self.db.execute_write("DELETE FROM people WHERE id = ?", (person_id,))
+        
+        with self.db.get_connection() as conn:
+            conn.execute("DELETE FROM facts WHERE person_id = ?", (person_id,))
+            conn.execute("DELETE FROM reminders WHERE person_id = ?", (person_id,))
+            conn.execute("DELETE FROM conversations WHERE person_id = ?", (person_id,))
+            affected = conn.execute("DELETE FROM people WHERE id = ?", (person_id,)).rowcount
+            
         logger.info(f"Permanently forgot person '{name}' and purged all associated records.")
         return affected > 0
 
@@ -337,7 +340,7 @@ class MemoryManager:
             words = search_query.strip().split()
             if not words:
                 return self.recall_facts(person_id=person_id)
-            fts_query = " OR ".join(f'"{w}"' for w in words if len(w) > 1)
+            fts_query = " OR ".join(f'"{w.replace(chr(34), "")}"' for w in words if len(w) > 1)
             if not fts_query:
                 return self.recall_facts(person_id=person_id, search_query=search_query)
 

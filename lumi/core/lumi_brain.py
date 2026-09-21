@@ -91,6 +91,7 @@ class LumiBrain:
         self._last_speech_time: float = time.time()
         self._current_speaker: Optional[str] = None
         self._voice_buffer: bytearray = bytearray()  # Buffer for voice enrollment
+        self._voice_buffer_lock = threading.Lock()
         self._enrolling_voice_for: Optional[str] = None  # Person ID being enrolled
         
         self.tts = BanglaTTS()
@@ -466,10 +467,11 @@ class LumiBrain:
                 # Check if it's late (e.g. system was offline)
                 # remind_at is from SQLite so it might be missing timezone, replace Z with +00:00 just in case
                 scheduled_time = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
-                # If naive, make it aware or vice versa? Let's just strip tzinfo for simple calculation 
-                # since both are local times based on our previous fix.
-                scheduled_time = scheduled_time.replace(tzinfo=None)
-                now = datetime.now()
+                # Use timezone-aware comparison to avoid UTC offset errors
+                if scheduled_time.tzinfo is None:
+                    from datetime import timezone as _tz
+                    scheduled_time = scheduled_time.replace(tzinfo=_tz.utc)
+                now = datetime.now(scheduled_time.tzinfo)
                 diff_minutes = (now - scheduled_time).total_seconds() / 60.0
                 
                 if diff_minutes > 5:
@@ -566,6 +568,7 @@ class LumiBrain:
         while self._running:
             # If silent mode is active, do not stream mic audio to Gemini Live or trigger speech
             if self._is_silent():
+                self.mic.read_chunk(1024)  # Drain mic buffer to prevent OS overflow
                 time.sleep(0.05)
                 continue
 
@@ -587,7 +590,8 @@ class LumiBrain:
 
             # 3. Collect audio for voice enrollment if active
             if self._enrolling_voice_for:
-                self._voice_buffer.extend(chunk)
+                with self._voice_buffer_lock:
+                    self._voice_buffer.extend(chunk)
 
             # 4. Eye animation on speech detection (DOA sound orientation disabled)
             energy = self._compute_rms(chunk)
@@ -1180,8 +1184,8 @@ class LumiBrain:
                     encs = face_recognition.face_encodings(rgb)
                     if encs:
                         encoding = encs[0].tolist()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'Face extraction error: {e}')
 
         from ..memory.models import ConsentStatus, utc_now_iso
         cleaned_name = name.strip()
@@ -1253,14 +1257,16 @@ class LumiBrain:
             
             # Start voice enrollment in background if engine available
             if self.speaker_id and self.speaker_id.is_available():
-                self._voice_buffer = bytearray()
+                with self._voice_buffer_lock:
+                    self._voice_buffer = bytearray()
                 self._enrolling_voice_for = person.id
 
                 def _finish_enrollment():
                     time.sleep(5.0)  # Collect 5 seconds of audio
-                    audio_data = bytes(self._voice_buffer)
+                    with self._voice_buffer_lock:
+                        audio_data = bytes(self._voice_buffer)
+                        self._voice_buffer = bytearray()
                     self._enrolling_voice_for = None
-                    self._voice_buffer = bytearray()
                     if len(audio_data) >= 16000 * 2 * 1.2:  # At least 1.2 sec
                         success = self.speaker_id.enroll_voice(person.id, audio_data)
                         if success:
@@ -1470,24 +1476,24 @@ class LumiBrain:
         if hasattr(self, "speaker") and self.speaker:
             try:
                 self.speaker.stop_stream()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Silent mode speaker stop error: {e}')
         if hasattr(self, "eyes") and self.eyes:
             try:
                 self.eyes.set_expression("sleep")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Silent mode eyes set error: {e}')
         if hasattr(self, "gestures") and self.gestures:
             try:
                 self.gestures.stop()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Silent mode gesture stop error: {e}')
         if hasattr(self, "realtime_voice") and self.realtime_voice:
             try:
                 if hasattr(self.realtime_voice, "set_silent_until"):
                     self.realtime_voice.set_silent_until(self._silent_until)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Silent mode realtime voice error: {e}')
 
         remaining = max(0, self._silent_until - now)
         logger.info(f"Silent mode activated for {remaining:.0f}s (until {self._silent_until}).")

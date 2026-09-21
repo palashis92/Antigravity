@@ -26,7 +26,7 @@ class BanglaTTS:
             return None
 
         if output_path is None:
-            tmp = tempfile.NamedTemporaryFile(suffix=".mp3", delete=False)
+            tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             output_path = tmp.name
             tmp.close()
 

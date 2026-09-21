@@ -60,6 +60,7 @@ class GeminiLiveClient:
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._ws: Optional[Any] = None
+        self._inject_lock = threading.Lock()
 
         self._awake = False
         self._last_active_time = time.time()
@@ -79,8 +80,8 @@ class GeminiLiveClient:
         if hasattr(self, "speaker") and self.speaker:
             try:
                 self.speaker.stop_stream()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f'Silent mode speaker stop error: {e}')
 
     def is_silent(self) -> bool:
         """Return True if robot is currently silenced by user command."""
@@ -123,8 +124,8 @@ class GeminiLiveClient:
             if self.speaker:
                 try:
                     self.speaker.stop_stream()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug(f'Silent mode speaker stop error: {e}')
             if self.eyes and hasattr(self.eyes, "set_expression"):
                 self.eyes.set_expression("sleep")
             return True
@@ -143,8 +144,14 @@ class GeminiLiveClient:
 
     def stop(self) -> None:
         self._running = False
-        if getattr(self, "_ws", None):
-            pass
+        if getattr(self, '_ws', None):
+            try:
+                if self._loop and self._loop.is_running():
+                    self._loop.call_soon_threadsafe(
+                        lambda ws=self._ws: asyncio.ensure_future(ws.close())
+                    )
+            except Exception:
+                logger.debug('Failed to close WebSocket during stop')
         if self._loop and self._loop.is_running():
             for task in asyncio.all_tasks(self._loop):
                 self._loop.call_soon_threadsafe(task.cancel)
@@ -390,7 +397,8 @@ class GeminiLiveClient:
                                 }
                             }))
                             _debug_chunk_count += 1
-                        except Exception:
+                        except Exception as e:
+                            logger.debug(f'Audio send error: {e}')
                             break
                 
                 if self._awake and getattr(self, "_is_ready", False):
@@ -411,8 +419,8 @@ class GeminiLiveClient:
                                         }
                                     }
                                 }))
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.debug(f'Video send error: {e}')
                         self._last_video_send = now
                 
                 await asyncio.sleep(0.01)
@@ -591,13 +599,14 @@ class GeminiLiveClient:
         """
         # Simple duplicate suppression within 10 seconds
         now = time.time()
-        if hasattr(self, "_last_injected_text") and self._last_injected_text == text:
-            if (now - getattr(self, "_last_injected_time", 0.0)) < 10.0:
-                logger.debug("Suppressing duplicate context injection within 10s.")
-                return
+        with self._inject_lock:
+            if hasattr(self, "_last_injected_text") and self._last_injected_text == text:
+                if (now - getattr(self, "_last_injected_time", 0.0)) < 10.0:
+                    logger.debug("Suppressing duplicate context injection within 10s.")
+                    return
 
-        self._last_injected_text = text
-        self._last_injected_time = now
+            self._last_injected_text = text
+            self._last_injected_time = now
 
         async def _send_when_ready() -> None:
             # Wait up to 10 seconds for websocket to be ready

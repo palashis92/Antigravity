@@ -12,6 +12,20 @@ from ..core.logger import get_logger
 from ..memory.manager import MemoryManager
 from ..memory.models import ConsentStatus, Person
 
+try:
+    import cv2
+    _HAS_CV2 = True
+except ImportError:
+    _HAS_CV2 = False
+    cv2 = None
+
+try:
+    import face_recognition
+    _HAS_FACE_RECOGNITION = True
+except ImportError:
+    _HAS_FACE_RECOGNITION = False
+    face_recognition = None
+
 from enum import Enum
 
 logger = get_logger("vision.face")
@@ -48,6 +62,9 @@ class FaceRecognitionService:
         self._pending_face_encoding: Optional[List[float]] = None
         self._pending_face_timestamp: float = 0.0
         self._last_interaction_timestamps: Dict[str, float] = {}
+
+        import threading
+        self._track_lock = threading.Lock()
 
         # Centroid-based temporal tracking & multi-frame voting
         self._tracks: Dict[int, Dict[str, Any]] = {}
@@ -119,7 +136,8 @@ class FaceRecognitionService:
             return []
 
         try:
-            import cv2
+            if not _HAS_CV2:
+                return self._simulate_face_detection(frame)
 
             if not hasattr(frame, "shape"):
                 return self._simulate_face_detection(frame)
@@ -139,7 +157,8 @@ class FaceRecognitionService:
             detected_faces = []
 
             try:
-                import face_recognition
+                if not _HAS_FACE_RECOGNITION:
+                    raise ImportError("face_recognition not installed")
 
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 face_locations = [(y, x + w, y + h, x) for (x, y, w, h) in faces]
@@ -243,88 +262,89 @@ class FaceRecognitionService:
         3. Low confidence or uncertain faces are NEVER assigned a known name.
         4. Temporal stability prevents 1-frame glitches from flipping identity.
         """
-        self._frame_counter += 1
-        now = time.time()
-        confirmed = []
+        with self._track_lock:
+            self._frame_counter += 1
+            now = time.time()
+            confirmed = []
 
-        for face in faces:
-            best_track_id = None
-            min_dist = 140.0  # max pixels a face moves between 0.15s frames
+            for face in faces:
+                best_track_id = None
+                min_dist = 140.0  # max pixels a face moves between 0.15s frames
 
-            for tid, tdata in list(self._tracks.items()):
-                if (now - tdata["last_seen_time"]) > 1.5:
-                    continue
-                tcx, tcy = tdata["center"]
-                dist = math.hypot(face.center[0] - tcx, face.center[1] - tcy)
-                if dist < min_dist:
-                    min_dist = dist
-                    best_track_id = tid
+                for tid, tdata in list(self._tracks.items()):
+                    if (now - tdata["last_seen_time"]) > 1.5:
+                        continue
+                    tcx, tcy = tdata["center"]
+                    dist = math.hypot(face.center[0] - tcx, face.center[1] - tcy)
+                    if dist < min_dist:
+                        min_dist = dist
+                        best_track_id = tid
 
-            if best_track_id is None:
-                self._next_track_id += 1
-                best_track_id = self._next_track_id
-                self._tracks[best_track_id] = {
-                    "center": face.center,
-                    "last_seen_time": now,
-                    "history": [],
-                }
+                if best_track_id is None:
+                    self._next_track_id += 1
+                    best_track_id = self._next_track_id
+                    self._tracks[best_track_id] = {
+                        "center": face.center,
+                        "last_seen_time": now,
+                        "history": [],
+                    }
 
-            track = self._tracks[best_track_id]
-            track["center"] = face.center
-            track["last_seen_time"] = now
+                track = self._tracks[best_track_id]
+                track["center"] = face.center
+                track["last_seen_time"] = now
 
-            # Record vote in track history: (person_id, person_name, person_obj)
-            if face.is_known and face.person is not None:
-                track["history"].append((face.person.id, face.person.name, face.person))
-            else:
-                track["history"].append((None, "__unknown__", None))
-
-            if len(track["history"]) > self._buffer_size:
-                track["history"].pop(0)
-
-            history = track["history"]
-            if len(history) >= 2:
-                from collections import Counter
-                id_counts = Counter(item[0] for item in history)
-                best_pid, best_count = id_counts.most_common(1)[0]
-
-                if best_pid is not None and best_count >= self._min_votes:
-                    # Confirmed known person with consensus
-                    person_obj = next((item[2] for item in reversed(history) if item[0] == best_pid), None)
-                    if person_obj:
-                        face.person = person_obj
-                        face.is_known = True
-                        face.identity_state = IdentityState.RECOGNIZED
-                        face.confidence = min(0.99, 0.75 + (best_count / self._buffer_size) * 0.24)
-                elif best_pid is None and best_count >= self._min_votes:
-                    # Confirmed unknown person
-                    face.person = None
-                    face.is_known = False
-                    face.identity_state = IdentityState.UNKNOWN
-                    face.confidence = 0.90
+                # Record vote in track history: (person_id, person_name, person_obj)
+                if face.is_known and face.person is not None:
+                    track["history"].append((face.person.id, face.person.name, face.person))
                 else:
-                    # Mixed / uncertain consensus -> do NOT call by name
-                    face.person = None
-                    face.is_known = False
-                    face.identity_state = IdentityState.LOW_CONFIDENCE
-                    face.confidence = 0.50
-            else:
-                # Not enough frames accumulated yet
-                if not face.is_known:
-                    face.person = None
-                    face.is_known = False
-                    face.identity_state = IdentityState.LOW_CONFIDENCE
-                    face.confidence = 0.40
+                    track["history"].append((None, "__unknown__", None))
 
-            confirmed.append(face)
+                if len(track["history"]) > self._buffer_size:
+                    track["history"].pop(0)
 
-        # Cleanup tracks inactive for > 2.5 seconds
-        expired = [tid for tid, tdata in self._tracks.items() if (now - tdata["last_seen_time"]) > 2.5]
-        for tid in expired:
-            del self._tracks[tid]
+                history = track["history"]
+                if len(history) >= 2:
+                    from collections import Counter
+                    id_counts = Counter(item[0] for item in history)
+                    best_pid, best_count = id_counts.most_common(1)[0]
 
-        self._last_confirmed_faces = list(confirmed)
-        return confirmed
+                    if best_pid is not None and best_count >= self._min_votes:
+                        # Confirmed known person with consensus
+                        person_obj = next((item[2] for item in reversed(history) if item[0] == best_pid), None)
+                        if person_obj:
+                            face.person = person_obj
+                            face.is_known = True
+                            face.identity_state = IdentityState.RECOGNIZED
+                            face.confidence = min(0.99, 0.75 + (best_count / self._buffer_size) * 0.24)
+                    elif best_pid is None and best_count >= self._min_votes:
+                        # Confirmed unknown person
+                        face.person = None
+                        face.is_known = False
+                        face.identity_state = IdentityState.UNKNOWN
+                        face.confidence = 0.90
+                    else:
+                        # Mixed / uncertain consensus -> do NOT call by name
+                        face.person = None
+                        face.is_known = False
+                        face.identity_state = IdentityState.LOW_CONFIDENCE
+                        face.confidence = 0.50
+                else:
+                    # Not enough frames accumulated yet
+                    if not face.is_known:
+                        face.person = None
+                        face.is_known = False
+                        face.identity_state = IdentityState.LOW_CONFIDENCE
+                        face.confidence = 0.40
+
+                confirmed.append(face)
+
+            # Cleanup tracks inactive for > 2.5 seconds
+            expired = [tid for tid, tdata in self._tracks.items() if (now - tdata["last_seen_time"]) > 2.5]
+            for tid in expired:
+                del self._tracks[tid]
+
+            self._last_confirmed_faces = list(confirmed)
+            return confirmed
 
     def get_last_faces(self) -> List[DetectedFace]:
         """Retrieve the most recent confirmed faces detected by the vision loop without reprocessing."""

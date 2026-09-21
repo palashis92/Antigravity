@@ -54,7 +54,11 @@ class ReminderScheduler:
         while self._running:
             try:
                 due_reminders = self.memory.get_due_reminders()
-                for rem in due_reminders:
+            except Exception as e:
+                logger.error(f"Error fetching due reminders: {e}", exc_info=True)
+                due_reminders = []
+            for rem in due_reminders:
+                try:
                     logger.info(f"Triggering scheduled reminder: '{rem.title}'")
                     self.event_bus.emit(
                         topic="reminder.due",
@@ -68,8 +72,8 @@ class ReminderScheduler:
                         source="reminder_scheduler",
                     )
                     self.memory.complete_reminder(rem.id)
-            except Exception as e:
-                logger.error(f"Error checking due reminders: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"Error processing reminder '{rem.title}': {e}", exc_info=True)
 
             # Sleep in short increments to allow rapid shutdown
             for _ in range(int(self.check_interval_s * 2)):
