@@ -10,7 +10,7 @@ import os
 import threading
 import urllib.request
 import urllib.error
-from typing import Optional
+from typing import Any, Optional
 
 from ..core.logger import get_logger
 
