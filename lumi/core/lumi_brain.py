@@ -718,7 +718,7 @@ class LumiBrain:
 
     def _audio_loop(self) -> None:
         logger.info("Starting Audio Loop (Streaming to Gemini Live + VAD + Speaker ID)")
-        ENERGY_THRESHOLD = 100.0
+        ENERGY_THRESHOLD = 150.0
         _debug_audio_frames = 0
 
         # Wire up VAD callbacks
@@ -774,12 +774,8 @@ class LumiBrain:
             if not is_speaker_active:
                 if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy >= ENERGY_THRESHOLD:
                     self._last_speech_time = time.time()
-                    if hasattr(self, "turn_arbiter"):
-                        self.turn_arbiter.wake_up(15.0)
-                    if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
-                        self.realtime_voice.wake_up(15.0)
-                    if event == SpeechEvent.SPEECH_START or energy >= ENERGY_THRESHOLD:
-                        self.trigger_acoustic_reflex(energy=energy)
+                if event == SpeechEvent.SPEECH_START:
+                    self.trigger_acoustic_reflex(energy=energy)
 
             # 5. Overlap detection (check periodically during speech)
             if not is_speaker_active and event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:

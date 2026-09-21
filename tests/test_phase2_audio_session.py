@@ -171,7 +171,12 @@ def test_gemini_live_barge_in_telemetry():
 
 
 def test_gemini_live_turn_arbiter_sync_and_speech_wake():
-    """Verify GeminiLiveClient dynamically wakes up when turn_arbiter opens dialogue and pushes audio."""
+    """Verify GeminiLiveClient dynamically wakes up when turn_arbiter opens dialogue and pushes audio.
+    
+    Also validates:
+    - C2 fix: is_awake() does NOT perpetually extend _awake_until
+    - C1 fix: thread-safe awake state access via _awake_lock
+    """
     import asyncio
     mic = MagicMock()
     speaker = MagicMock()
@@ -197,13 +202,25 @@ def test_gemini_live_turn_arbiter_sync_and_speech_wake():
     assert not client.is_awake()
     assert not arbiter.is_in_dialogue()
 
+    # C1 fix: _awake_lock must exist
+    assert hasattr(client, '_awake_lock')
+
     # Speech triggers arbiter wake
     wake_result = arbiter.should_stream_mic(energy=160.0)
     assert wake_result is True
     assert arbiter.is_in_dialogue()
 
-    # Client is now dynamically awake
+    # Client is now dynamically awake via turn_arbiter delegation
     assert client.is_awake()
+
+    # C2 fix: is_awake() should NOT mutate _awake or _awake_until when turn_arbiter is in dialogue
+    awake_until_before = client._awake_until
+    for _ in range(50):  # Simulate rapid polling
+        client.is_awake()
+    awake_until_after = client._awake_until
+    assert awake_until_after == awake_until_before, (
+        f"is_awake() must not extend _awake_until: before={awake_until_before}, after={awake_until_after}"
+    )
 
     # Setup mock event loop and audio queue on client
     loop = MagicMock()
@@ -225,4 +242,40 @@ def test_gemini_live_turn_arbiter_sync_and_speech_wake():
     queue_mock.reset_mock()
     client.push_audio_chunk(fake_chunk)
     queue_mock.put_nowait.assert_not_called()
+
+
+def test_turn_arbiter_silence_streaming_during_dialogue():
+    """Verify silence frames pass through turn_arbiter during active dialogue (C3 fix).
+    
+    Gemini's server-side VAD needs silence frames for end-of-turn detection.
+    The turn arbiter must NOT block low-energy chunks when a dialogue is active.
+    """
+    arbiter = AudioTurnArbiter(turn_window_s=2.0, energy_threshold=100.0)
+
+    # Outside dialogue: silence (energy=20) must be blocked
+    assert not arbiter.is_in_dialogue()
+    assert not arbiter.should_stream_mic(energy=20.0)
+    assert not arbiter.should_stream_mic(energy=50.0)
+    assert not arbiter.should_stream_mic(energy=99.0)
+
+    # Open dialogue window
+    arbiter.wake_up(2.0)
+    assert arbiter.is_in_dialogue()
+
+    # During dialogue: ALL energy levels must pass (including silence)
+    assert arbiter.should_stream_mic(energy=0.0), "Pure silence must pass during dialogue for Gemini VAD"
+    assert arbiter.should_stream_mic(energy=20.0), "Low energy must pass during dialogue"
+    assert arbiter.should_stream_mic(energy=50.0), "Sub-threshold energy must pass during dialogue"
+    assert arbiter.should_stream_mic(energy=99.0), "Near-threshold energy must pass during dialogue"
+    assert arbiter.should_stream_mic(energy=200.0), "Normal speech must pass during dialogue"
+    assert arbiter.should_stream_mic(energy=500.0), "Loud speech must pass during dialogue"
+
+    # After dialogue expires: silence must be blocked again
+    time.sleep(2.1)
+    assert not arbiter.is_in_dialogue()
+    assert not arbiter.should_stream_mic(energy=20.0), "Silence must be blocked outside dialogue"
+    assert not arbiter.should_stream_mic(energy=99.0), "Sub-threshold must be blocked outside dialogue"
+    # But loud speech can still auto-wake
+    assert arbiter.should_stream_mic(energy=160.0), "Loud speech should auto-wake dialogue"
+    assert arbiter.is_in_dialogue()
 

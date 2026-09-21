@@ -128,22 +128,25 @@ class AudioTurnArbiter:
             if self._is_speaker_playing or (now < (self._speaker_active_until + self.echo_tail_s)):
                 return False
 
-            # 3. Check minimum energy floor
+            in_dialogue = now < self._dialogue_active_until
+
+            # 3. If in active dialogue, stream ALL chunks (including silence
+            #    that Gemini needs for server-side end-of-turn detection)
+            if in_dialogue:
+                return True
+
+            # 4. Not in dialogue — apply energy floor to reject ambient noise
             if energy < self.energy_threshold:
                 return False
 
-            # 4. Check dialogue window (only stream if in conversation or waking)
-            if not (now < self._dialogue_active_until):
-                if not allow_wake_detection:
-                    return False
-                # If high energy speech occurs, allow initial wake turn
-                if energy >= (self.energy_threshold * 1.5):
-                    self._dialogue_active_until = now + self.turn_window_s
-                    get_telemetry().record_event("dialogue_wake_on_speech", context="turn_arbiter")
-                    return True
+            # 5. High energy speech can auto-wake dialogue window
+            if not allow_wake_detection:
                 return False
-
-            return True
+            if energy >= (self.energy_threshold * 1.5):
+                self._dialogue_active_until = now + self.turn_window_s
+                get_telemetry().record_event("dialogue_wake_on_speech", context="turn_arbiter")
+                return True
+            return False
 
     def record_barge_in(self, latency_ms: float) -> None:
         """Record telemetry for user interruption latency."""
