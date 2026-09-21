@@ -49,3 +49,5 @@ vision:
   fps: 15
   face_recognition_enabled: true
   object_detection_enabled: true
+  greeting_cooldown_s: 3000.0
+  unknown_greeting_cooldown_s: 7200.0

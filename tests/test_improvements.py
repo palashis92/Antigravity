@@ -480,6 +480,101 @@ def test_conversation_context_retention_in_setup() -> None:
     assert "দারুণ! সিলেটের চা বাগান খুব সুন্দর!" in sys_instruction
 
 
+def test_unknown_greeting_suppression_and_sticky_active_person() -> None:
+    """Verify that sticky active_person is preserved across unrecognized frames and unknown greeting is suppressed."""
+    from unittest.mock import MagicMock
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.core.state_manager import StateManager, BehaviorState
+    from lumi.memory.models import Person
+    from lumi.vision.face import DetectedFace, IdentityState
+
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.state = StateManager()
+    brain.settings = MagicMock()
+    brain.settings.vision.frame_width = 640
+    brain.settings.vision.frame_height = 480
+    brain.settings.vision.unknown_greeting_cooldown_s = 7200.0
+    brain.event_bus = MagicMock()
+    brain.head = MagicMock()
+    brain.eyes = MagicMock()
+    brain.mic = MagicMock()
+    brain.meeting_manager = None
+    brain.face_service = MagicMock()
+    brain.realtime_voice = MagicMock()
+    brain.realtime_voice._is_ready = False
+    brain.realtime_voice._last_active_time = 0.0
+    brain._is_silent = MagicMock(return_value=False)
+    brain._last_unknown_greeting_time = 0.0
+    brain._unknown_greeting_asked = False
+    brain._last_speech_time = 0.0
+    brain.gestures = MagicMock()
+
+    mizan = Person(id="person_mizan", name="Mizan", relationship="owner")
+    brain.active_person = mizan
+
+    # Create an unrecognized face
+    unrecognized_face = DetectedFace(
+        bounding_box=(200, 100, 150, 150),
+        center=(275.0, 175.0),
+        confidence=0.50,
+        person=None,
+        is_known=False,
+        identity_state=IdentityState.UNKNOWN,
+        embedding=[],
+    )
+    brain.face_service.detect_and_recognize.return_value = [unrecognized_face]
+    brain.face_service.confirm_identity.return_value = [unrecognized_face]
+
+    # Run process_person_interaction
+    brain.process_person_interaction(MagicMock())
+
+    # active_person MUST be retained (sticky)
+    assert brain.active_person is not None
+    assert brain.active_person.name == "Mizan"
+    # State MUST remain IDLE, not transition to GREETING
+    assert brain.state.current_state == BehaviorState.IDLE
+    assert brain._unknown_greeting_asked is False
+
+
+def test_bilingual_owner_matching_and_memorize_person() -> None:
+    """Verify bilingual alias matching and memorize_person fallback without pending face."""
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+    from unittest.mock import MagicMock
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mizan = mem.remember_person("Mizan", relationship="owner", notes="Owner of LUMI.")
+
+    # 1. Test bilingual find_person_by_name
+    found_mizan_bn = mem.find_person_by_name("মিজান")
+    assert found_mizan_bn is not None
+    assert found_mizan_bn.id == mizan.id
+    assert found_mizan_bn.name == "Mizan"
+
+    found_owner = mem.find_person_by_name("মালিক")
+    assert found_owner is not None
+    assert found_owner.id == mizan.id
+
+    # 2. Test _tool_memorize_person linking to owner even without pending face encoding
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.memory = mem
+    brain.face_service = MagicMock()
+    brain.face_service.get_pending_face.return_value = None
+    brain.camera = None
+    brain.speaker_id = None
+    brain.active_person = None
+    brain._unknown_greeting_asked = True
+
+    # Call with Bengali name "মিজান"
+    res = brain._tool_memorize_person(name="মিজান", notes="Updated owner notes.")
+    assert "Mizan" in res
+    assert brain.active_person is not None
+    assert brain.active_person.name == "Mizan"
+    assert brain._unknown_greeting_asked is False
+
+
 if __name__ == "__main__":
     test_servo_auto_relax_lifecycle()
     print("✓ test_servo_auto_relax_lifecycle PASSED")
@@ -509,4 +604,9 @@ if __name__ == "__main__":
     print("✓ test_silence_command_and_audio_suppression PASSED")
     test_conversation_context_retention_in_setup()
     print("✓ test_conversation_context_retention_in_setup PASSED")
+    test_unknown_greeting_suppression_and_sticky_active_person()
+    print("✓ test_unknown_greeting_suppression_and_sticky_active_person PASSED")
+    test_bilingual_owner_matching_and_memorize_person()
+    print("✓ test_bilingual_owner_matching_and_memorize_person PASSED")
     print("All improvement tests passed successfully!")
+

@@ -319,6 +319,9 @@ class LumiBrain:
         self._audio_thread: Optional[threading.Thread] = None
         # Silent mode: when set, suppress all greetings, gestures, and triggered injections until this timestamp
         self._silent_until: float = 0.0
+        self._unknown_greeting_asked: bool = False
+        self._last_unknown_greeting_time: float = 0.0
+        self._last_speech_time: float = 0.0
 
         # Learned behavioral rules store and temporal tracking
         from ..memory.learned_rules import LearnedRulesStore
@@ -515,6 +518,11 @@ class LumiBrain:
             if self.active_person and (now - self._last_face_seen_time > 30.0):
                 logger.info(f"Active person '{self.active_person.name}' timed out (no face for 30s).")
                 self.active_person = None
+                self._unknown_greeting_asked = False
+
+            # Reset unknown greeting asked flag if no face has been seen for > 60s
+            if (now - getattr(self, "_last_face_seen_time", 0.0)) > 60.0:
+                self._unknown_greeting_asked = False
 
             # Anjum Mode: 10s absence timeout & proactive stimulation
             if self.state.current_state == BehaviorState.ANJUM_MODE:
@@ -647,12 +655,14 @@ class LumiBrain:
                 logger.error(f"Speaker identification error in background thread: {e}")
                 return
 
+            now_t = time.time()
+            self._last_speech_time = now_t
+
             if speaker_name and confidence >= 0.75:
                 logger.info(f"[VOICE] detected name={speaker_name} confidence={confidence:.2f}")
-                now_t = time.time()
                 face_in_view = (now_t - getattr(self, "_last_face_seen_time", 0.0)) < 4.0
                 
-                # Visual identity always takes precedence when a face is currently in view
+                # Visual identity always takes precedence when a known face is confirmed
                 if face_in_view and self.active_person:
                     if speaker_name.lower() != self.active_person.name.lower():
                         logger.info(
@@ -661,11 +671,22 @@ class LumiBrain:
                         )
                         return
                 elif face_in_view and not self.active_person:
-                    # An unknown face is in view — do not falsely attribute speaker name
-                    logger.info(
-                        f"[VOICE] Suppressing speaker update '{speaker_name}' because an unknown face is looking at camera."
-                    )
-                    return
+                    # Multi-modal fusion: Face is looking at camera, voice ID identified the speaker!
+                    matched_p = self.memory.find_person_by_name(speaker_name)
+                    if matched_p:
+                        self.active_person = matched_p
+                        self._unknown_greeting_asked = False
+                        logger.info(
+                            f"[VOICE] Multi-modal fusion: Attributed active face to recognized voice speaker '{speaker_name}'."
+                        )
+                        # Link pending face embedding to this speaker if available
+                        if hasattr(self.face_service, "get_pending_face"):
+                            pending_emb = self.face_service.get_pending_face()
+                            if pending_emb:
+                                matched_p.add_face_embedding(pending_emb)
+                                self.memory.update_person(matched_p)
+                                logger.info(f"[VOICE] Associated pending face embedding with '{speaker_name}'.")
+
 
                 if speaker_name != self._current_speaker:
                     self._current_speaker = speaker_name
@@ -1049,130 +1070,180 @@ class LumiBrain:
                         self.speaker.play_file(audio_path, block=False)
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
         else:
-            # Unknown or unconfirmed person — clear active_person to prevent stale attribution
-            self.active_person = None
+            # Unrecognized face in current frame
+            # 1. If an active person is already established (e.g. owner Mizan or an introduced friend),
+            # maintain sticky attribution across transient frame misses / lighting shifts.
+            # NEVER clear active_person to None on single frame glitches, and NEVER treat them as a stranger!
+            if self.active_person is not None:
+                logger.debug(f"[IDENTITY] Maintaining active_person '{self.active_person.name}' across frame variation.")
+                return
 
-            # If identity is LOW_CONFIDENCE, wait for multi-frame voting to stabilize
-            # Do NOT falsely assume stranger or ask for their name during temporary glitches
+            # 2. If identity is LOW_CONFIDENCE, wait for multi-frame voting to stabilize
             from ..vision.face import IdentityState
             if getattr(face, "identity_state", None) == IdentityState.LOW_CONFIDENCE:
                 logger.debug("[IDENTITY] Face in LOW_CONFIDENCE state — awaiting temporal stabilization.")
                 return
 
-            # Confirmed unknown person learning hook
+            # 3. Store pending unknown face for potential enrollment
             if hasattr(self.face_service, "set_pending_face"):
                 self.face_service.set_pending_face(face.embedding)
             
             now_t = time.time()
             unknown_vision_conf = getattr(getattr(self, "settings", None), "vision", None)
-            unknown_cooldown = getattr(unknown_vision_conf, "unknown_greeting_cooldown_s", 180.0) if unknown_vision_conf else 180.0
-            if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) >= unknown_cooldown:
-                if self._is_silent():
-                    logger.info("Silent mode active: suppressing unknown-person greeting.")
-                    return
-                self._last_unknown_greeting_time = now_t
-                self.state.transition_to(BehaviorState.GREETING, reason="spot_unknown")
-                self.eyes.set_expression("curious")
-                self.gestures.play_async(self.gestures.greet, name="greet_unknown")
-                
-                import random
-                unknown_prompts = [
-                    (
-                        "[VISUAL EVENT: An unfamiliar person has just appeared in front of your camera right now!]\n"
-                        "INSTRUCTION: Greet them immediately, warmly, and with friendly curiosity in Bengali (বাংলা).\n"
-                        "- First introduce yourself as LUMI ('আমি লুমি').\n"
-                        "- Ask for their name with friendly interest ('তোমাকে তো আগে দেখিনি! তোমার নাম কী?' বা 'পরিচয়টা দাও তো!').\n"
-                        "- CRITICAL RULE: Do NOT ask if they have a message for the owner right now, and do NOT say 'তিনি নেই' on first contact. First introduce yourself, make friends, and ask their name! Only mention the owner later in conversation if they ask for them.\n"
-                        "- When they tell you their name, you can remember them with the 'memorize_person' tool.\n"
-                        "- Do NOT repeat the exact same sentence if you just said it. Keep it natural and fresh!"
-                    ),
-                    (
-                        "[VISUAL EVENT: A new visitor is standing in front of you!]\n"
-                        "INSTRUCTION: Greet them with cheerful surprise in Bengali (বাংলা).\n"
-                        "- Say something lively like: 'আরে, নতুন একজন বন্ধু এসেছে! আমি লুমি, তোমার নাম কী বলো তো?'\n"
-                        "- Focus completely on introducing yourself and getting to know them.\n"
-                        "- Do NOT ask if they have a message for the owner on first meeting.\n"
-                        "- Be friendly, sweet, and invite them to chat!"
-                    ),
-                    (
-                        "[VISUAL EVENT: You see a new face in front of your camera!]\n"
-                        "INSTRUCTION: Greet them warmly and politely in conversational Bengali (বাংলা).\n"
-                        "- Say: 'হ্যালো! তোমাকে তো আগে দেখিনি। আমি লুমি! তোমার পরিচয়টা কী জানতে পারি?'\n"
-                        "- Let the conversation flow naturally. Do NOT mention the owner right away.\n"
-                        "- Keep your response short, sweet, and human-like."
-                    ),
+            unknown_cooldown = getattr(unknown_vision_conf, "unknown_greeting_cooldown_s", 7200.0) if unknown_vision_conf else 7200.0
+
+            # 4. Check silent mode
+            if self._is_silent():
+                logger.info("Silent mode active: suppressing unknown-person greeting.")
+                return
+
+            # 5. Check ongoing conversation activity (< 120s)
+            voice_last_active = getattr(getattr(self, "realtime_voice", None), "_last_active_time", 0.0)
+            recent_speech_t = max(getattr(self, "_last_speech_time", 0.0), voice_last_active)
+            if (now_t - recent_speech_t) < 120.0:
+                logger.debug("[IDENTITY] Active conversation in progress — suppressing stranger greeting.")
+                return
+
+            # 6. Check if already asked in this session/encounter
+            if getattr(self, "_unknown_greeting_asked", False):
+                logger.debug("[IDENTITY] Unknown person already greeted in this session — suppressing repetitive prompt.")
+                return
+
+            # 7. Check cooldown (2 hours / 7200s)
+            if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) < unknown_cooldown:
+                return
+
+            self._last_unknown_greeting_time = now_t
+            self._unknown_greeting_asked = True
+            self.state.transition_to(BehaviorState.GREETING, reason="spot_unknown")
+            self.eyes.set_expression("curious")
+            self.gestures.play_async(self.gestures.greet, name="greet_unknown")
+            import random
+            unknown_prompts = [
+                (
+                    "[VISUAL EVENT: An unfamiliar person has just appeared in front of your camera right now!]\n"
+                    "INSTRUCTION: Greet them immediately, warmly, and with friendly curiosity in Bengali (বাংলা).\n"
+                    "- First introduce yourself as LUMI ('আমি লুমি').\n"
+                    "- Ask for their name with friendly interest ('তোমাকে তো আগে দেখিনি! তোমার নাম কী?' বা 'পরিচয়টা দাও তো!').\n"
+                    "- CRITICAL RULE: Do NOT ask if they have a message for the owner right now, and do NOT say 'তিনি নেই' on first contact. First introduce yourself, make friends, and ask their name! Only mention the owner later in conversation if they ask for them.\n"
+                    "- When they tell you their name, you can remember them with the 'memorize_person' tool.\n"
+                    "- Do NOT repeat the exact same sentence if you just said it. Keep it natural and fresh!"
+                ),
+                (
+                    "[VISUAL EVENT: A new visitor is standing in front of you!]\n"
+                    "INSTRUCTION: Greet them with cheerful surprise in Bengali (বাংলা).\n"
+                    "- Say something lively like: 'আরে, নতুন একজন বন্ধু এসেছে! আমি লুমি, তোমার নাম কী বলো তো?'\n"
+                    "- Focus completely on introducing yourself and getting to know them.\n"
+                    "- Do NOT ask if they have a message for the owner on first meeting.\n"
+                    "- Be friendly, sweet, and invite them to chat!"
+                ),
+                (
+                    "[VISUAL EVENT: You see a new face in front of your camera!]\n"
+                    "INSTRUCTION: Greet them warmly and politely in conversational Bengali (বাংলা).\n"
+                    "- Say: 'হ্যালো! তোমাকে তো আগে দেখিনি। আমি লুমি! তোমার পরিচয়টা কী জানতে পারি?'\n"
+                    "- Let the conversation flow naturally. Do NOT mention the owner right away.\n"
+                    "- Keep your response short, sweet, and human-like."
+                ),
+            ]
+            prompt = random.choice(unknown_prompts)
+            
+            is_gemini_ready = getattr(self.realtime_voice, "_is_ready", False) and getattr(self.realtime_voice, "_ws", None)
+            if is_gemini_ready:
+                self.realtime_voice.inject_context(prompt, trigger_response=True)
+            elif hasattr(self, "tts") and hasattr(self, "speaker"):
+                local_greetings = [
+                    "হ্যালো! আমি লুমি। তোমাকে তো আগে দেখিনি, তোমার নাম কী?",
+                    "আরে, নতুন বন্ধু! আমি লুমি। তোমার পরিচয়টা দাও তো!",
+                    "ওহ, হ্যালো! আমি লুমি। তোমার নাম কী বলো তো?"
                 ]
-                prompt = random.choice(unknown_prompts)
-                
-                is_gemini_ready = getattr(self.realtime_voice, "_is_ready", False) and getattr(self.realtime_voice, "_ws", None)
-                if is_gemini_ready:
-                    self.realtime_voice.inject_context(prompt, trigger_response=True)
-                elif hasattr(self, "tts") and hasattr(self, "speaker"):
-                    local_greetings = [
-                        "হ্যালো! আমি লুমি। তোমাকে তো আগে দেখিনি, তোমার নাম কী?",
-                        "আরে, নতুন বন্ধু! আমি লুমি। তোমার পরিচয়টা দাও তো!",
-                        "ওহ, হ্যালো! আমি লুমি। তোমার নাম কী বলো তো?"
-                    ]
-                    greeting_text = random.choice(local_greetings)
-                    audio_path = self.tts.synthesize(greeting_text)
-                    if audio_path:
-                        self.speaker.play_file(audio_path, block=False)
-                self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
+                greeting_text = random.choice(local_greetings)
+                audio_path = self.tts.synthesize(greeting_text)
+                if audio_path:
+                    self.speaker.play_file(audio_path, block=False)
+            self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
 
     # =========================================================================
     # Realtime Tools Implementation
     # =========================================================================
     def _tool_memorize_person(self, name: str, relationship: str = "guest", age: Optional[int] = None, notes: str = "") -> str:
-        """Saves the pending unknown face with detailed metadata and starts voice enrollment."""
-        encoding = self.face_service.get_pending_face()
-        if not encoding:
-            return "No unknown face is currently in view to memorize. Please ask them to look at the camera."
+        """Saves person with detailed metadata, attributes active person, and starts voice enrollment."""
+        encoding = self.face_service.get_pending_face() if hasattr(self.face_service, "get_pending_face") else None
         
+        # On-demand face extraction from camera frame if pending encoding was not pre-buffered
+        if not encoding and hasattr(self, "camera") and self.camera and self.camera.is_available():
+            frame = self.camera.get_frame()
+            if frame is not None:
+                try:
+                    import face_recognition
+                    import cv2
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    encs = face_recognition.face_encodings(rgb)
+                    if encs:
+                        encoding = encs[0].tolist()
+                except Exception:
+                    pass
+
         from ..memory.models import ConsentStatus, utc_now_iso
-        
-        # Face-based dedup: check if this face already belongs to someone
-        existing_face_person = self.memory.find_person_by_face(encoding)
-        if existing_face_person:
-            # This face is already registered — update name if different
-            if existing_face_person.name.lower() != name.strip().lower():
-                logger.warning(
-                    f"[IDENTITY] Face already belongs to '{existing_face_person.name}', "
-                    f"but user said name is '{name}'. Updating name."
-                )
-                existing_face_person.name = name.strip()
-            existing_face_person.last_seen = utc_now_iso()
-            existing_face_person.interaction_count += 1
+        cleaned_name = name.strip()
+        cleaned_lower = cleaned_name.lower()
+
+        owner = self.get_owner()
+        is_owner_target = (
+            (owner and cleaned_lower == owner.name.lower())
+            or cleaned_lower in ["mizan", "মিজান", "owner", "মালিক"]
+            or (relationship and relationship.lower() == "owner")
+        )
+
+        person = None
+        # 1. If face embedding matches an existing registered person
+        if encoding:
+            person = self.memory.find_person_by_face(encoding)
+
+        # 2. If target is owner, associate directly with owner profile
+        if not person and is_owner_target and owner:
+            person = owner
+
+        # 3. If person matches by name or alias
+        if not person:
+            person = self.memory.find_person_by_name(cleaned_name)
+
+        if person:
+            # Updating existing person
+            person.last_seen = utc_now_iso()
+            person.interaction_count += 1
             if relationship and relationship != "guest":
-                existing_face_person.relationship = relationship
+                person.relationship = relationship
             if age is not None:
-                existing_face_person.age = age
+                person.age = age
             if notes:
-                existing_face_person.notes = notes
-            existing_face_person.add_face_embedding(encoding)
-            self.memory.update_person(existing_face_person)
-            person = existing_face_person
-            logger.info(f"[PROFILE] updating person_id={person.id} name='{person.name}' age={person.age}")
+                person.notes = (person.notes + "; " + notes) if person.notes else notes
+            if encoding:
+                person.add_face_embedding(encoding)
+            self.memory.update_person(person)
+            logger.info(f"[PROFILE] updated person_id={person.id} name='{person.name}' age={person.age}")
         else:
-            # New face — create new person
+            # Create new person profile
             self.memory.remember_person(
-                name=name,
+                name=cleaned_name,
                 relationship=relationship,
                 consent_status=ConsentStatus.GRANTED,
                 preferred_language="bn"
             )
-            person = self.memory.find_person_by_name(name)
+            person = self.memory.find_person_by_name(cleaned_name)
             if person:
-                person.face_embedding = encoding
+                if encoding:
+                    person.face_embedding = encoding
                 if age is not None:
                     person.age = age
                 if notes:
                     person.notes = notes
                 self.memory.update_person(person)
-                logger.info(f"[PROFILE] updating person_id={person.id} name='{person.name}' age={person.age}")
+                logger.info(f"[PROFILE] created person_id={person.id} name='{person.name}' age={person.age}")
 
         if person:
             # Immediately activate this person so conversations are attributed correctly
             self.active_person = person
+            self._unknown_greeting_asked = False
             # Clear voting buffers so subsequent frames recognize the new person right away
             if hasattr(self.face_service, '_tracks'):
                 self.face_service._tracks.clear()
@@ -1201,9 +1272,13 @@ class LumiBrain:
                     target=_finish_enrollment, daemon=True, name=f"VoiceEnroll_{name}"
                 )
                 enrollment_thread.start()
-                return f"Successfully memorized the face of {name} ({relationship}). Also enrolling their voice profile..."
+                role_label = "মালিক" if (person.relationship and person.relationship.lower() == "owner") else person.relationship
+                face_status = " এবং চেহারা মনে রাখা হয়েছে" if encoding else ""
+                return f"সফলভাবে {person.name} ({role_label}) তথ্য সংরক্ষিত হয়েছে{face_status}। কণ্ঠস্বর প্রোফাইল তৈরি হচ্ছে..."
 
-            return f"Successfully memorized the face of {name} ({relationship})."
+            role_label = "মালিক" if (person.relationship and person.relationship.lower() == "owner") else person.relationship
+            face_status = " এবং চেহারা মনে রাখা হয়েছে" if encoding else ""
+            return f"সফলভাবে {person.name} ({role_label}) তথ্য সংরক্ষিত হয়েছে{face_status}।"
         return f"Failed to save {name} to database."
 
     def _tool_memorize_fact(self, fact: str, person_name: Optional[str] = None) -> str:

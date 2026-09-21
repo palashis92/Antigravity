@@ -123,6 +123,8 @@ def main():
         ("test_owner_mizan_and_person_specific_memory_isolation", timp.test_owner_mizan_and_person_specific_memory_isolation, ()),
         ("test_silence_command_and_audio_suppression", timp.test_silence_command_and_audio_suppression, ()),
         ("test_conversation_context_retention_in_setup", timp.test_conversation_context_retention_in_setup, ()),
+        ("test_unknown_greeting_suppression_and_sticky_active_person", timp.test_unknown_greeting_suppression_and_sticky_active_person, ()),
+        ("test_bilingual_owner_matching_and_memorize_person", timp.test_bilingual_owner_matching_and_memorize_person, ()),
     ]
 
     for name, fn, args in tests_to_run:

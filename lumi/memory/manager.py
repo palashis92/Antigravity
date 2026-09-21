@@ -98,12 +98,50 @@ class MemoryManager:
             return None
         return Person.from_row(rows[0])
 
+    BILINGUAL_NAME_ALIASES = {
+        "মিজান": "mizan",
+        "পলাশ": "palash",
+        "আঞ্জুম": "anjum",
+        "মালিক": "owner",
+    }
+
     def find_person_by_name(self, name: str) -> Optional[Person]:
-        """Find person by case-insensitive name match."""
-        rows = self.db.execute_query("SELECT * FROM people WHERE LOWER(name) = LOWER(?)", (name.strip(),))
-        if not rows:
+        """Find person by case-insensitive name match, bilingual Bengali alias, or role."""
+        if not name or not name.strip():
             return None
-        return Person.from_row(rows[0])
+        cleaned = name.strip()
+        cleaned_lower = cleaned.lower()
+
+        # 1. Direct case-insensitive match
+        rows = self.db.execute_query("SELECT * FROM people WHERE LOWER(name) = LOWER(?)", (cleaned,))
+        if rows:
+            return Person.from_row(rows[0])
+
+        # 2. Check bilingual translation / alias dictionary
+        mapped = self.BILINGUAL_NAME_ALIASES.get(cleaned_lower, self.BILINGUAL_NAME_ALIASES.get(cleaned))
+        if mapped:
+            if mapped == "owner":
+                owner_rows = self.db.execute_query("SELECT * FROM people WHERE LOWER(relationship) = 'owner' LIMIT 1")
+                if owner_rows:
+                    return Person.from_row(owner_rows[0])
+            else:
+                rows = self.db.execute_query("SELECT * FROM people WHERE LOWER(name) = LOWER(?)", (mapped,))
+                if rows:
+                    return Person.from_row(rows[0])
+
+        # 3. Match 'owner' or 'মালিক'
+        if cleaned_lower in ["owner", "মালিক", "আমার মালিক"]:
+            owner_rows = self.db.execute_query("SELECT * FROM people WHERE LOWER(relationship) = 'owner' LIMIT 1")
+            if owner_rows:
+                return Person.from_row(owner_rows[0])
+
+        # 4. Partial / substring match on existing registered people
+        for p in self.list_people():
+            p_lower = p.name.lower()
+            if p_lower in cleaned_lower or cleaned_lower in p_lower:
+                return p
+
+        return None
 
     def list_people(self, only_consented: bool = False) -> List[Person]:
         """List all registered persons."""

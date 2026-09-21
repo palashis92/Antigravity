@@ -233,6 +233,23 @@ class GeminiLiveClient:
         except Exception as e:
             logger.debug(f"Could not append learned rules to setup prompt: {e}")
 
+        # Inject owner & primary user context so Gemini never asks who it is talking to
+        owner_name = "Mizan"
+        try:
+            if self.memory and hasattr(self.memory, "list_people"):
+                for p in self.memory.list_people():
+                    if p.relationship and p.relationship.lower() == "owner":
+                        owner_name = p.name
+                        break
+        except Exception:
+            pass
+        instructions += (
+            f"\n\n[PRIMARY USER & OWNER DIRECTIVE]:\n"
+            f"Your owner and primary user is {owner_name}. You are in {owner_name}'s workspace/room. "
+            f"Assume you are speaking with {owner_name} by default unless someone explicitly introduces themselves as someone else. "
+            f"NEVER ask 'তোমার নাম কী?' or 'পরিচয় দাও' or 'who are you?' repeatedly!"
+        )
+
         # Inject recent conversation turns so LUMI never forgets context across turns/reconnects
         try:
             if self.memory and hasattr(self.memory, "get_recent_turns"):
