@@ -433,9 +433,87 @@ class LumiBrain:
 
         return None
 
+    @staticmethod
+    def _detect_silence_command(text: str) -> Optional[float]:
+        """Deterministic silence command detector.
+        
+        Matches commands like:
+            'চুপ থাকো', '১০ মিনিট চুপ থাকো', '৫ মিনিট কথা বলবে না',
+            'shut up', 'be quiet', 'stop talking', 'নিশ্চল থাকো'
+        Returns duration in seconds, or None if not a silence command.
+        """
+        import re
+        t = text.lower().strip()
+        silence_triggers = [
+            "চুপ থাকো", "চুপ থাক", "চুপ কর", "চুপ করো", "চুপ রেখো",
+            "কথা বলবে না", "কথা বলো না", "কথা বলিস না", "শান্ত থাকো", "নিশ্চল থাকো",
+            "মুখ বন্ধ", "থামো", "be quiet", "shut up", "stop talking", "stay silent"
+        ]
+        if any(trig in t for trig in silence_triggers):
+            # Check for duration in minutes
+            m = re.search(r"(\d+|১|২|৩|৪|৫|৬|৭|৮|৯|১০)\s*(?:মিনিট|min|minute)", t)
+            if m:
+                val = m.group(1)
+                bn_map = {"১": 1, "২": 2, "৩": 3, "৪": 4, "৫": 5, "৬": 6, "৭": 7, "৮": 8, "৯": 9, "১০": 10}
+                mins = bn_map.get(val, int(val) if val.isdigit() else 5)
+                return mins * 60.0
+            return 300.0  # Default 5 minutes
+        return None
+
+    def _detect_motion_command(self, text: str) -> bool:
+        """Deterministic physical motion command detector."""
+        t = text.lower().strip()
+        try:
+            if any(k in t for k in ["হাত তোলো", "হাত উঠাও", "হাত উপরে", "raise hand"]):
+                self._tool_control_body("both_arms", "raise")
+                return True
+            elif any(k in t for k in ["হাত নামাও", "হাত নিচে", "lower hand"]):
+                self._tool_control_body("both_arms", "lower")
+                return True
+            elif any(k in t for k in ["মাথা নামাও", "নিচে তাকাও", "look down"]):
+                self._tool_control_body("head", "look_down")
+                return True
+            elif any(k in t for k in ["ডানে তাকাও", "ডানে ঘোরো", "look right"]):
+                self._tool_control_body("head", "look_right")
+                return True
+            elif any(k in t for k in ["বামে তাকাও", "বামে ঘোরো", "look left"]):
+                self._tool_control_body("head", "look_left")
+                return True
+            elif any(k in t for k in ["নাচো", "ডান্স", "dance"]):
+                self._tool_perform_gesture("dance")
+                return True
+            elif any(k in t for k in ["হাত নাড়াও", "হাই দাও", "wave"]):
+                self._tool_perform_gesture("wave")
+                return True
+        except Exception as e:
+            logger.debug(f"Motion command execution error: {e}")
+        return False
+
     def _on_turn_complete(self, event: Event) -> None:
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
+
+        # 1. Deterministic silence command interceptor
+        if u_text:
+            silence_dur = self._detect_silence_command(u_text)
+            if silence_dur is not None:
+                mins = int(silence_dur / 60)
+                logger.info(f"🤫 Deterministic Silence Command activated: {mins} minutes.")
+                self._tool_set_silent_mode(duration_seconds=silence_dur)
+                import random
+                quips = [
+                    f"আচ্ছা, {mins} মিনিটের জন্য একদম মুখ বন্ধ করলাম!",
+                    f"ঠিক আছে, শান্তিতে থাকুন, আমি {mins} মিনিট সম্পূর্ণ চুপ!",
+                    "থাকলাম চুপ! পরে কিন্তু মিস করবেন না!"
+                ]
+                quip = random.choice(quips)
+                audio_path = self.tts.synthesize(quip) if hasattr(self, "tts") and self.tts else None
+                if audio_path and hasattr(self, "speaker") and self.speaker:
+                    self.speaker.play_file(audio_path, block=True)
+                return
+
+            # 2. Deterministic motion command execution
+            self._detect_motion_command(u_text)
 
         # Check for conversational introductions (e.g. 'আমার নাম তানভীর', 'আমি পলাশ')
         if u_text:

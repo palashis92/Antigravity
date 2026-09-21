@@ -251,10 +251,8 @@ class GeminiLiveClient:
         except Exception:
             pass
         instructions += (
-            f"\n\n[PRIMARY USER & OWNER DIRECTIVE]:\n"
-            f"Your owner and primary user is {owner_name}. You are in {owner_name}'s workspace/room. "
-            f"Assume you are speaking with {owner_name} by default unless someone explicitly introduces themselves as someone else. "
-            f"NEVER ask 'তোমার নাম কী?' or 'পরিচয় দাও' or 'who are you?' repeatedly!"
+            f"\n\n[COMPANION CONTEXT]:\n"
+            f"You are currently with {owner_name} (your owner). Treat them as your close friend and companion."
         )
 
         # Inject recent conversation turns so LUMI never forgets context across turns/reconnects
@@ -268,9 +266,9 @@ class GeminiLiveClient:
                         dialogue_lines.append(f"{speaker_label}: {t.text}")
                     if dialogue_lines:
                         instructions += (
-                            "\n\n[RECENT CONVERSATION TRANSCRIPT (DO NOT FORGET THIS CONTEXT)]:\n"
+                            "\n\n[RECENT CONVERSATION TRANSCRIPT]:\n"
                             + "\n".join(dialogue_lines)
-                            + "\n(INSTRUCTION: The above is the recent conversation history with the user. Seamlessly continue the conversation from this context. Do not ask who they are or forget what was just discussed.)"
+                            + "\n(Seamlessly continue from this context.)"
                         )
         except Exception as e:
             logger.debug(f"Could not append recent conversation history to setup prompt: {e}")
