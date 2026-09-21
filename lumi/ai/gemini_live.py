@@ -462,10 +462,6 @@ class GeminiLiveClient:
         if not self._loop or not self._loop.is_running():
             return
             
-        # Silent mode: Drop mic chunks completely
-        if self.is_silent():
-            return
-
         # Software AEC (Echo Prevention): Drop mic chunks completely while speaker is playing
         if time.time() < getattr(self, "_speaker_active_until", 0):
             return
@@ -491,11 +487,6 @@ class GeminiLiveClient:
         _debug_chunk_count = 0
         try:
             while self._running and not self._rotation_requested:
-                # If silenced by user, do not send audio
-                if self.is_silent():
-                    await asyncio.sleep(0.05)
-                    continue
-
                 # Check proactive session rotation (12 minutes)
                 now = time.time()
                 if (now - self._session_start_time) >= self._max_session_duration_s:

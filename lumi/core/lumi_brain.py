@@ -726,11 +726,6 @@ class LumiBrain:
         self.vad.set_on_overlap_detected(self._on_overlap_detected)
         
         while self._running:
-            # If silent mode is active, do not stream mic audio to Gemini Live or trigger speech
-            if self._is_silent():
-                self.mic.read_chunk(1024)  # Drain mic buffer to prevent OS overflow
-                time.sleep(0.05)
-                continue
 
             chunk = self.mic.read_chunk(1024)
             if not chunk:
@@ -752,8 +747,8 @@ class LumiBrain:
             num_faces = len(getattr(self, '_last_detected_faces', []))
             is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
 
-            # Continuous streaming for Gemini Live neural VAD: only gate on speaker playback (AEC) and silence mode
-            should_stream = (not is_speaker_active) and (not self._is_silent())
+            # Continuous streaming for Gemini Live neural VAD: only gate on speaker playback (AEC)
+            should_stream = not is_speaker_active
             if hasattr(self, "turn_arbiter"):
                 self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)
 
@@ -1267,6 +1262,11 @@ class LumiBrain:
                     recent_facts = self.memory.recall_facts(person_id=person.id)
                     if recent_facts:
                         fact_str = ", ".join([f.fact_text for f in recent_facts[:3]])
+
+                if fact_str and fact_str != "None":
+                    # Filter out stale silence commands so Gemini doesn't mistake them for active orders
+                    filtered = [f for f in fact_str.split(". ") if not any(w in f.lower() for w in ["চুপ", "silent", "quiet", "shut up", "মিনিট"])]
+                    fact_str = ". ".join(filtered) if filtered else "None"
                 
                 # Check for unread messages
                 unread_msgs = ""
@@ -1752,6 +1752,10 @@ class LumiBrain:
 
     def _tool_set_silent_mode(self, duration_seconds: Optional[float] = None, silent_until_iso: Optional[str] = None) -> str:
         """Activate silent mode — suppress all greetings, gestures, and spontaneous speech."""
+        if hasattr(self, "state") and self.state and getattr(self.state, "current_state", None) == BehaviorState.GREETING:
+            logger.warning("Ignoring set_silent_mode tool call during autonomous GREETING.")
+            return "Cannot enter silent mode during autonomous greeting."
+
         from datetime import datetime
         now = time.time()
 
