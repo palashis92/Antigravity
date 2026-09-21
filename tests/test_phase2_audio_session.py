@@ -168,3 +168,61 @@ def test_gemini_live_barge_in_telemetry():
         content = f.read()
     assert "TEL-01" in content
     assert "TEL-02" in content
+
+
+def test_gemini_live_turn_arbiter_sync_and_speech_wake():
+    """Verify GeminiLiveClient dynamically wakes up when turn_arbiter opens dialogue and pushes audio."""
+    import asyncio
+    mic = MagicMock()
+    speaker = MagicMock()
+    eyes = MagicMock()
+    gestures = MagicMock()
+    state = MagicMock()
+    memory = MagicMock()
+    event_bus = MagicMock()
+    arbiter = AudioTurnArbiter(turn_window_s=5.0, energy_threshold=100.0)
+
+    client = GeminiLiveClient(
+        mic=mic,
+        speaker=speaker,
+        eyes=eyes,
+        gestures=gestures,
+        state=state,
+        memory=memory,
+        event_bus=event_bus,
+        turn_arbiter=arbiter,
+    )
+
+    # Initially dormant
+    assert not client.is_awake()
+    assert not arbiter.is_in_dialogue()
+
+    # Speech triggers arbiter wake
+    wake_result = arbiter.should_stream_mic(energy=160.0)
+    assert wake_result is True
+    assert arbiter.is_in_dialogue()
+
+    # Client is now dynamically awake
+    assert client.is_awake()
+
+    # Setup mock event loop and audio queue on client
+    loop = MagicMock()
+    loop.is_running.return_value = True
+    queue_mock = MagicMock()
+    loop.call_soon_threadsafe = lambda fn, *args: fn(*args)
+    client._loop = loop
+    client._audio_queue = queue_mock
+
+    # Audio chunk should now be successfully pushed to queue
+    fake_chunk = b"\x01\x02" * 512
+    client.push_audio_chunk(fake_chunk)
+    queue_mock.put_nowait.assert_called_once_with(fake_chunk)
+
+    # When client is dormant/reset, push_audio_chunk drops chunks
+    client.reset_dialogue_state()
+    assert not client.is_awake()
+    assert not arbiter.is_in_dialogue()
+    queue_mock.reset_mock()
+    client.push_audio_chunk(fake_chunk)
+    queue_mock.put_nowait.assert_not_called()
+

@@ -24,7 +24,7 @@ class AudioTurnArbiter:
         self,
         echo_tail_s: float = 0.35,
         turn_window_s: float = 12.0,
-        energy_threshold: float = 120.0,
+        energy_threshold: float = 100.0,
     ) -> None:
         self.echo_tail_s = echo_tail_s
         self.turn_window_s = turn_window_s

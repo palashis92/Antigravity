@@ -718,7 +718,7 @@ class LumiBrain:
 
     def _audio_loop(self) -> None:
         logger.info("Starting Audio Loop (Streaming to Gemini Live + VAD + Speaker ID)")
-        ENERGY_THRESHOLD = 400
+        ENERGY_THRESHOLD = 100.0
         _debug_audio_frames = 0
 
         # Wire up VAD callbacks
@@ -755,7 +755,7 @@ class LumiBrain:
             if hasattr(self, "turn_arbiter"):
                 should_stream = self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)
             else:
-                should_stream = (not is_speaker_active) and (energy >= 120.0)
+                should_stream = (not is_speaker_active) and (energy >= 100.0)
 
             if should_stream and self.proximity_filter.should_pass(chunk, is_overlap):
                 if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
@@ -772,9 +772,13 @@ class LumiBrain:
 
             # 4. Instant Local Acoustic Reflex (<150ms) on speech onset
             if not is_speaker_active:
-                if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy > ENERGY_THRESHOLD:
+                if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy >= ENERGY_THRESHOLD:
                     self._last_speech_time = time.time()
-                    if event == SpeechEvent.SPEECH_START or energy > ENERGY_THRESHOLD:
+                    if hasattr(self, "turn_arbiter"):
+                        self.turn_arbiter.wake_up(15.0)
+                    if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+                        self.realtime_voice.wake_up(15.0)
+                    if event == SpeechEvent.SPEECH_START or energy >= ENERGY_THRESHOLD:
                         self.trigger_acoustic_reflex(energy=energy)
 
             # 5. Overlap detection (check periodically during speech)
@@ -828,7 +832,13 @@ class LumiBrain:
         if hasattr(self, "state") and self.state and self.state.current_state == BehaviorState.IDLE:
             self.state.transition_to(BehaviorState.LISTENING, reason="acoustic_reflex_onset")
 
-        # 4. Telemetry logging
+        # 4. Open dialogue window for turn-taking
+        if hasattr(self, "turn_arbiter"):
+            self.turn_arbiter.wake_up(15.0)
+        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+            self.realtime_voice.wake_up(15.0)
+
+        # 5. Telemetry logging
         try:
             from .telemetry import get_telemetry_logger
             tel = get_telemetry_logger()
@@ -1141,6 +1151,12 @@ class LumiBrain:
         self._had_tracked_face = True
         self._search_phase = 0  # Face is acquired, reset search state
 
+        # Open dialogue window so LUMI is ready to converse when face is in view
+        if hasattr(self, "turn_arbiter"):
+            self.turn_arbiter.wake_up(15.0)
+        if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+            self.realtime_voice.wake_up(15.0)
+
         # Track exit side
         frame_w = self.settings.vision.frame_width
         frame_h = self.settings.vision.frame_height
@@ -1239,6 +1255,11 @@ class LumiBrain:
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
+                
+                if hasattr(self, "turn_arbiter"):
+                    self.turn_arbiter.wake_up(20.0)
+                if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+                    self.realtime_voice.wake_up(20.0)
                 
                 relationship = person.relationship if hasattr(person, 'relationship') else 'friend'
                 notes = person.notes if hasattr(person, 'notes') and person.notes else 'None'
@@ -1404,6 +1425,11 @@ class LumiBrain:
             self.state.transition_to(BehaviorState.GREETING, reason="spot_unknown")
             self.eyes.set_expression("curious")
             self.gestures.play_async(self.gestures.greet, name="greet_unknown")
+            
+            if hasattr(self, "turn_arbiter"):
+                self.turn_arbiter.wake_up(20.0)
+            if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+                self.realtime_voice.wake_up(20.0)
             import random
             unknown_prompts = [
                 (

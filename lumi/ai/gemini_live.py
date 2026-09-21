@@ -93,11 +93,18 @@ class GeminiLiveClient:
 
     def is_awake(self) -> bool:
         """Return True if the robot is currently in an active dialogue window."""
+        now = time.time()
+        # 1. Synchronize with turn_arbiter authority
+        if getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_in_dialogue():
+            self._awake = True
+            self._awake_until = max(self._awake_until, now + 15.0)
+            return True
+
         if not getattr(self, "_awake", False):
             return False
         if getattr(self, "_awake_until", 0.0) == 0.0:
             return True  # Manually set awake without timeout (for unit tests)
-        if time.time() < self._awake_until:
+        if now < self._awake_until:
             return True
         self._awake = False
         self._awake_until = 0.0
@@ -437,8 +444,6 @@ class GeminiLiveClient:
     def push_audio_chunk(self, chunk: bytes) -> None:
         if not hasattr(self, "_audio_queue") or not self._audio_queue:
             return
-        if not self.is_awake():
-            return
         if not self._loop or not self._loop.is_running():
             return
             
@@ -448,6 +453,14 @@ class GeminiLiveClient:
 
         # Software AEC (Echo Prevention): Drop mic chunks completely while speaker is playing
         if time.time() < getattr(self, "_speaker_active_until", 0):
+            return
+
+        # Synchronize awake state if turn_arbiter has active dialogue
+        if getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_in_dialogue():
+            self._awake = True
+            self._awake_until = max(self._awake_until, time.time() + 15.0)
+
+        if not self.is_awake():
             return
             
         try:
@@ -481,7 +494,7 @@ class GeminiLiveClient:
                 if chunk and len(chunk) > 0:
                     self._last_active_time = time.time()
                     
-                    if self._awake and getattr(self, "_is_ready", False):
+                    if self.is_awake() and getattr(self, "_is_ready", False):
                         audio_b64 = base64.b64encode(chunk).decode("utf-8")
                         
                         try:
@@ -494,11 +507,13 @@ class GeminiLiveClient:
                                 }
                             }))
                             _debug_chunk_count += 1
+                            if _debug_chunk_count % 100 == 0:
+                                logger.info(f"🎙️ [Gemini Live] Streamed {_debug_chunk_count} live audio chunks to Gemini.")
                         except Exception as e:
                             logger.debug(f'Audio send error: {e}')
                             break
                 
-                if self._awake and getattr(self, "_is_ready", False):
+                if self.is_awake() and getattr(self, "_is_ready", False):
                     # Send video frame if camera is available (on-demand / periodic)
                     now = time.time()
                     if self.camera and self.camera.is_available() and (now - self._last_video_send > 1.0):
@@ -632,6 +647,7 @@ class GeminiLiveClient:
                             txt = _get_text(content['inputAudioTranscription'])
                             print(f"🗣️  [USER]: {txt}")
                             if txt:
+                                logger.info(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
                                 self._check_silence_command(txt)
                                 self._check_eager_recall(txt)
@@ -639,11 +655,13 @@ class GeminiLiveClient:
                             txt = _get_text(content['outputAudioTranscription'])
                             print(f"🤖 [LUMI (Draft)]: {txt}")
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
+                                logger.info(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
                         if "inputTranscription" in content:
                             txt = _get_text(content['inputTranscription'])
                             print(f"🗣️  [USER]: {txt}")
                             if txt:
+                                logger.info(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
                                 self._check_silence_command(txt)
                                 self._check_eager_recall(txt)
@@ -651,6 +669,7 @@ class GeminiLiveClient:
                             txt = _get_text(content['outputTranscription'])
                             print(f"🤖 [LUMI (Draft)]: {txt}")
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
+                                logger.info(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
 
                         # End of turn detection

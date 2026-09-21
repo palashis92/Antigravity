@@ -149,6 +149,7 @@ def main():
         ("test_gemini_live_awake_gating", tp2.test_gemini_live_awake_gating, ()),
         ("test_gemini_live_inject_context_wakes_dialogue", tp2.test_gemini_live_inject_context_wakes_dialogue, ()),
         ("test_gemini_live_barge_in_telemetry", tp2.test_gemini_live_barge_in_telemetry, ()),
+        ("test_gemini_live_turn_arbiter_sync_and_speech_wake", tp2.test_gemini_live_turn_arbiter_sync_and_speech_wake, ()),
         # Phase 3: Vision & Perception Throughput
         ("test_face_recognition_track_caching_throughput", tp3.test_face_recognition_track_caching_throughput, ()),
         ("test_target_lost_search_hysteresis_and_smooth_pan", tp3.test_target_lost_search_hysteresis_and_smooth_pan, ()),

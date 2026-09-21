@@ -33,7 +33,60 @@ class SystemMicBackend(MicBackendBase):
         self._thread: Optional[threading.Thread] = None
         self._spatial = None
         self._detect_alsa_device()
+        self._unmute_capture_mixer()
         self._init_spatial()
+
+    def _unmute_capture_mixer(self) -> None:
+        """Force ALSA capture mixer controls on Raspberry Pi (WM8960 / ReSpeaker 2-Mics) to 100% and unmuted."""
+        import re
+        card_id = None
+        if "hw:" in self.alsa_device or "plughw:" in self.alsa_device:
+            m = re.search(r'(?:plug)?hw:(\w+)', self.alsa_device)
+            if m:
+                card_id = m.group(1)
+
+        candidate_cards = []
+        if card_id:
+            candidate_cards.append(card_id)
+        candidate_cards.extend(["1", "0", "seeed-2mic-voicecard", "seeed2micvoicec", "wm8960-soundcard", "wm8960soundcard", "default"])
+        cards = list(dict.fromkeys(candidate_cards))
+
+        controls = ["Capture", "ADC PCM", "Mic", "Line", "Input", "Digital", "Mic Boost"]
+        switches = [
+            "Left Input Mixer Boost",
+            "Right Input Mixer Boost",
+            "Left Boost Mixer LINPUT1",
+            "Right Boost Mixer RINPUT1",
+            "Left Boost Mixer LINPUT2",
+            "Right Boost Mixer RINPUT2",
+            "Left Input Boost Mixer LINPUT1",
+            "Right Input Boost Mixer RINPUT1",
+        ]
+
+        for card in cards:
+            for ctrl in controls:
+                for val in ["100%", "63", "unmute", "cap"]:
+                    try:
+                        subprocess.run(
+                            ["amixer", "-c", str(card), "sset", ctrl, val],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+            for sw in switches:
+                for val in ["on", "unmute"]:
+                    try:
+                        subprocess.run(
+                            ["amixer", "-c", str(card), "sset", sw, val],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+        logger.info("ALSA microphone capture mixer configured and unmuted at 100%.")
 
     def _detect_alsa_device(self) -> None:
         """Find the ReSpeaker 2-Mics Pi HAT capture card automatically if available."""
@@ -64,6 +117,7 @@ class SystemMicBackend(MicBackendBase):
             self._spatial = None
 
     def start_recording(self) -> bool:
+        self._unmute_capture_mixer()
         self._recording = True
         self._thread = threading.Thread(target=self._reader_loop, daemon=True, name="SystemMicReader")
         self._thread.start()
