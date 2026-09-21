@@ -115,11 +115,11 @@ class LumiBrain:
 
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
-        self.tools.register("memorize_person", self._tool_memorize_person, "CALL THIS ONLY when the user explicitly introduces themselves (e.g., 'My name is X') or asks you to remember their name. Do NOT call this for random names or entities mentioned in conversation.", {
+        self.tools.register("memorize_person", self._tool_memorize_person, "Call this whenever ANY person introduces themselves (e.g. 'আমার নাম তানভীর', 'আমি পলাশ', 'এ হচ্ছে তানভীর', 'My name is X') or when the owner introduces a guest, friend, or colleague. This automatically captures their face from the camera and permanently remembers them.", {
             "type": "object", 
             "properties": {
                 "name": {"type": "string", "description": "The person's full name."},
-                "relationship": {"type": "string", "description": "Their relationship to the owner, e.g. friend, brother, guest."},
+                "relationship": {"type": "string", "description": "Their relationship to the owner, e.g. friend, brother, guest, creator, colleague."},
                 "age": {"type": "integer", "description": "The person's age if mentioned (e.g. 25)."},
                 "notes": {"type": "string", "description": "Any short important facts or details to remember about them."}
             }, 
@@ -376,15 +376,84 @@ class LumiBrain:
         except Exception:
             return None
 
+    @staticmethod
+    def _extract_introduced_name(text: str) -> Optional[tuple[str, str]]:
+        """Extract person name and optional relationship from conversational introductions.
+        
+        Examples:
+            'আমার নাম তানভীর' -> ('তানভীর', 'friend')
+            'আমি পলাশ' -> ('পলাশ', 'creator')
+            'এ হচ্ছে আমার বন্ধু সাকিব' -> ('সাকিব', 'friend')
+            'My name is Alex' -> ('Alex', 'guest')
+        """
+        import re
+        t = text.strip()
+        if not t:
+            return None
+
+        # Common non-name words (verbs, pronouns, adjectives) to ignore
+        stopwords = {
+            "ভালো", "ভালোই", "খারাপ", "ঠিক", "আছি", "এখানে", "চাচ্ছি", "চাই", "বলছি",
+            "বলতে", "জানি", "লুমি", "রোবট", "একটা", "একটু", "ঘুমাই", "খাই", "যাই", "না",
+            "তো", "মানুষ", "মালিক", "আসি", "গেছি", "শুনছি", "দেখছি", "বলবো", "করি", "করছি",
+            "fine", "good", "bad", "here", "ready", "going", "doing", "speaking", "talking",
+            "robot", "lumi", "yes", "no", "ok", "okay"
+        }
+
+        # Pattern 1: 'আমার নাম <নাম>' or 'নাম হলো <নাম>'
+        m = re.search(r"(?:আমার\s+নাম|আমার\s+পরিচয়|নাম\s+হলো|নাম\s+হল)\s+([A-Za-z\u0980-\u09FF]+)", t, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip()
+            if name.lower() not in stopwords and len(name) >= 2:
+                rel = "creator" if name.lower() in ["palash", "পলাশ"] else "friend"
+                return (name, rel)
+
+        # Pattern 2: 'এ হচ্ছে / এটা আমার বন্ধু / ভাই <নাম>'
+        m = re.search(r"(?:এ\s+হচ্ছে|এ\s+হল|এটা|ওর\s+নাম|এর\s+নাম)\s+(?:আমার\s+)?(?:বন্ধু\s+|ভাই\s+|বোন\s+)?([A-Za-z\u0980-\u09FF]+)", t, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip()
+            if name.lower() not in stopwords and len(name) >= 2:
+                return (name, "friend")
+
+        # Pattern 3: 'আমি <নাম>' / 'ami <name>'
+        m = re.search(r"^(?:আমি|ami)\s+([A-Za-z\u0980-\u09FF]+)(?:[।!?,\s]|$)", t, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip()
+            if name.lower() not in stopwords and len(name) >= 2:
+                rel = "creator" if name.lower() in ["palash", "পলাশ"] else "friend"
+                return (name, rel)
+
+        # Pattern 4: 'my name is <name>' / 'i am <name>'
+        m = re.search(r"(?:my\s+name\s+is|i\s+am|this\s+is\s+my\s+friend|this\s+is)\s+([A-Za-z]+)", t, re.IGNORECASE)
+        if m:
+            name = m.group(1).strip()
+            if name.lower() not in stopwords and len(name) >= 2:
+                rel = "creator" if name.lower() in ["palash"] else "friend"
+                return (name, rel)
+
+        return None
+
     def _on_turn_complete(self, event: Event) -> None:
+        u_text = event.data.get("user", "")
+        l_text = event.data.get("lumi", "")
+
+        # Check for conversational introductions (e.g. 'আমার নাম তানভীর', 'আমি পলাশ')
+        if u_text:
+            try:
+                intro = self._extract_introduced_name(u_text)
+                if intro:
+                    name, rel = intro
+                    logger.info(f"[IDENTITY] Conversational introduction detected in user speech: name='{name}', rel='{rel}'")
+                    self._tool_memorize_person(name=name, relationship=rel)
+            except Exception as e:
+                logger.debug(f"Introduction detection error: {e}")
+
         person = self.active_person
         if not person:
             # Default to owner (Mizan), or the primary registered person
             person = self.get_owner()
             self.active_person = person
 
-        u_text = event.data.get("user", "")
-        l_text = event.data.get("lumi", "")
         person_id = person.id if person else None
 
         # 1. Record conversation turn to SQLite conversations table
@@ -1080,13 +1149,18 @@ class LumiBrain:
             # Unrecognized face in current frame
             owner = self.get_owner()
 
-            # 1. Auto-enroll face for owner if owner has no face embedding yet
-            if owner and not getattr(owner, "face_embeddings", None) and face.embedding:
-                owner.add_face_embedding(face.embedding)
-                self.memory.update_person(owner)
-                self.active_person = owner
-                logger.info(f"[IDENTITY] Auto-enrolled primary face embedding for owner '{owner.name}'.")
-                return
+            # 1. Universal Continuous Face Learning:
+            # If an active person is established (Mizan, Palash, or any introduced friend/guest),
+            # automatically capture and store multiple face samples (up to 3) for angle/lighting robustness.
+            target_person = self.active_person or owner
+            if target_person and face.embedding:
+                stored = getattr(target_person, "face_embeddings", [])
+                if len(stored) < 3:
+                    target_person.add_face_embedding(face.embedding)
+                    self.memory.update_person(target_person)
+                    self.active_person = target_person
+                    logger.info(f"[IDENTITY] Auto-enrolled face sample ({len(stored)+1}/3) for '{target_person.name}'.")
+                    return
 
             # 2. Maintain sticky active_person across transient frame misses / lighting shifts
             if self.active_person is not None:

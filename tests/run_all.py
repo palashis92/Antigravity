@@ -126,6 +126,7 @@ def main():
         ("test_unknown_greeting_suppression_and_sticky_active_person", timp.test_unknown_greeting_suppression_and_sticky_active_person, ()),
         ("test_bilingual_owner_matching_and_memorize_person", timp.test_bilingual_owner_matching_and_memorize_person, ()),
         ("test_owner_auto_enroll_and_persistent_identity", timp.test_owner_auto_enroll_and_persistent_identity, ()),
+        ("test_universal_continuous_face_learning_and_conversational_intro", timp.test_universal_continuous_face_learning_and_conversational_intro, ()),
     ]
 
     for name, fn, args in tests_to_run:

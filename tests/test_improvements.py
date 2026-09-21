@@ -639,9 +639,85 @@ def test_owner_auto_enroll_and_persistent_identity() -> None:
     assert brain.active_person is not None
     assert brain.active_person.id == mizan.id
 
-    # 3. State must remain IDLE (not transition to GREETING for stranger)
     assert brain.state.current_state == BehaviorState.IDLE
     brain.realtime_voice.inject_context.assert_not_called()
+
+
+def test_universal_continuous_face_learning_and_conversational_intro() -> None:
+    """Verify that any person introduced in speech is auto-memorized and their face is continuously enrolled."""
+    from unittest.mock import MagicMock
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.core.event_bus import Event
+    from lumi.core.state_manager import StateManager
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+    from lumi.vision.face import DetectedFace, IdentityState
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mem.remember_person("Mizan", relationship="owner")
+
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.memory = mem
+    brain.settings = MagicMock()
+    brain.settings.vision.frame_width = 640
+    brain.settings.vision.frame_height = 480
+    brain.face_service = MagicMock()
+    brain.face_service.get_pending_face.return_value = None
+    brain.camera = None
+    brain.speaker_id = None
+    brain.active_person = None
+    brain._unknown_greeting_asked = False
+    brain.mem0 = MagicMock()
+    brain.realtime_voice = MagicMock()
+    brain.event_bus = MagicMock()
+    brain.head = MagicMock()
+    brain.eyes = MagicMock()
+    brain.mic = MagicMock()
+    brain.meeting_manager = None
+    brain.state = StateManager()
+
+    # 1. Test conversational introduction extraction
+    intro = brain._extract_introduced_name("লুমি, আমার নাম তানভীর")
+    assert intro is not None
+    name, rel = intro
+    assert name == "তানভীর"
+    assert rel == "friend"
+
+    # 2. Test conversational introduction in _on_turn_complete
+    ev = Event(
+        topic="conversation.turn_complete",
+        data={"user": "হ্যালো লুমি, আমার নাম তানভীর।", "lumi": "হ্যালো তানভীর!"},
+        source="test",
+    )
+    brain._on_turn_complete(ev)
+
+    # Tanveer must be created in memory and set as active_person
+    tanveer = mem.find_person_by_name("তানভীর")
+    assert tanveer is not None
+    assert brain.active_person is not None
+    assert brain.active_person.id == tanveer.id
+
+    # 3. Test Universal Continuous Face Learning for Tanveer
+    face_sample1 = [0.2] * 128
+    detected1 = DetectedFace(
+        bounding_box=(100, 100, 150, 150),
+        center=(175.0, 175.0),
+        confidence=0.9,
+        person=None,
+        is_known=False,
+        identity_state=IdentityState.UNKNOWN,
+        embedding=face_sample1,
+    )
+    brain.face_service.detect_and_recognize.return_value = [detected1]
+    brain.face_service.confirm_identity.return_value = [detected1]
+
+    brain.process_person_interaction(MagicMock())
+
+    # Verify face sample 1 was auto-enrolled under Tanveer's profile
+    updated_tanveer = mem.get_person(tanveer.id)
+    assert len(updated_tanveer.face_embeddings) == 1
+    assert updated_tanveer.face_embeddings[0] == face_sample1
 
 
 if __name__ == "__main__":
