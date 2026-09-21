@@ -107,3 +107,42 @@ def test_learned_rules_sqlite_persistence():
     deleted = store.delete_rule(rule["id"])
     assert deleted
     assert len(db.execute_query("SELECT * FROM learned_rules")) == 0
+
+
+def test_listening_state_transitions_to_greeting_and_observing():
+    """Verify LISTENING state allows transitioning to GREETING and OBSERVING when people are spotted."""
+    sm = StateManager(BehaviorState.IDLE)
+    assert sm.transition_to(BehaviorState.LISTENING, reason="acoustic_reflex")
+    assert sm.current_state == BehaviorState.LISTENING
+
+    # Spotting a known person should transition cleanly to GREETING
+    assert sm.transition_to(BehaviorState.GREETING, reason="spot_Alvarez")
+    assert sm.current_state == BehaviorState.GREETING
+
+    # From GREETING back to IDLE
+    assert sm.transition_to(BehaviorState.IDLE, reason="greeting_complete")
+    assert sm.current_state == BehaviorState.IDLE
+
+    # Back to LISTENING, then spotting unknown person should transition cleanly to OBSERVING
+    assert sm.transition_to(BehaviorState.LISTENING, reason="acoustic_reflex")
+    assert sm.transition_to(BehaviorState.OBSERVING, reason="person_spotted_unknown")
+    assert sm.current_state == BehaviorState.OBSERVING
+
+
+def test_mem0_cloud_empty_turn_guarded():
+    """Verify Mem0CloudEngine ignores empty user text and avoids HTTP 400 Bad Request."""
+    from lumi.memory.mem0_cloud import Mem0CloudEngine
+    engine = Mem0CloudEngine()
+    engine.api_key = "fake_key"
+    with patch("threading.Thread") as mock_thread:
+        # Empty user text (e.g. from robot greeting turn) should not launch worker thread
+        engine.process_conversation_turn_async("user123", "Mijan", "", "শুভ রাত্রি!")
+        mock_thread.assert_not_called()
+
+        # Whitespace user text should not launch worker thread
+        engine.process_conversation_turn_async("user123", "Mijan", "   ", "শুভ রাত্রি!")
+        mock_thread.assert_not_called()
+
+        # Valid user text should launch worker thread
+        engine.process_conversation_turn_async("user123", "Mijan", "আমার নাম মিজান", "হ্যালো মিজান")
+        mock_thread.assert_called_once()

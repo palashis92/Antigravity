@@ -109,6 +109,16 @@ def test_telemetry_logger_non_blocking() -> None:
         assert lines[2]["event"] == "watchdog_reset"
 
 
+def test_mono_to_stereo_interleaving() -> None:
+    """Verify _mono_to_stereo correctly interleaves 16-bit mono samples into 2-channel stereo."""
+    from lumi.audio.speaker import _mono_to_stereo
+    mono = b"\x01\x00\x02\x00"
+    stereo = _mono_to_stereo(mono)
+    expected = b"\x01\x00\x01\x00\x02\x00\x02\x00"
+    assert stereo == expected
+    assert len(stereo) == len(mono) * 2
+
+
 if __name__ == "__main__":
     test_display_driver_single_display_ce0_only()
     test_display_driver_dual_display_flag()
@@ -116,4 +126,5 @@ if __name__ == "__main__":
     test_mic_wm8960_detection()
     test_servo_slew_rate_limiter()
     test_telemetry_logger_non_blocking()
+    test_mono_to_stereo_interleaving()
     print("All Phase 1 tests passed!")

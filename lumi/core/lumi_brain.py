@@ -318,7 +318,7 @@ class LumiBrain:
         from ..memory.mem0_cloud import Mem0CloudEngine
         if os.environ.get("MEM0_API_KEY"):
             logger.info("MEM0_API_KEY detected! Using official Mem0 Cloud API.")
-            self.mem0 = Mem0CloudEngine()
+            self.mem0 = Mem0CloudEngine(memory=self.memory)
         else:
             logger.info("No MEM0_API_KEY found. Falling back to native LumiMem0 Engine.")
             self.mem0 = LumiMem0Engine(self.memory)
@@ -599,14 +599,14 @@ class LumiBrain:
             except Exception as e:
                 logger.debug(f"Person-mention detection error: {e}")
 
-        # 3. Asynchronously extract semantic facts via Mem0
-        if (u_text or l_text) and person:
+        # 3. Asynchronously extract semantic facts via Mem0 (only if user provided text)
+        if u_text and u_text.strip() and person:
             try:
                 self.mem0.process_conversation_turn_async(
                     person_id=person.id,
                     person_name=person.name,
-                    user_text=u_text,
-                    ai_text=l_text
+                    user_text=u_text.strip(),
+                    ai_text=l_text.strip()
                 )
             except Exception as e:
                 logger.error(f"Error in Mem0 async turn processing: {e}")

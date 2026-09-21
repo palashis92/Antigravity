@@ -17,6 +17,28 @@ from ..hardware.mocks import MockSpeakerBackend
 logger = get_logger("audio.speaker")
 
 
+def _mono_to_stereo(mono_bytes: bytes) -> bytes:
+    """Convert 16-bit mono PCM bytes to 16-bit stereo PCM bytes (interleaved L=R)."""
+    try:
+        import numpy as np
+        samples = np.frombuffer(mono_bytes, dtype=np.int16)
+        stereo_samples = np.column_stack((samples, samples))
+        return stereo_samples.tobytes()
+    except Exception:
+        # Pure Python fallback
+        n_samples = len(mono_bytes) // 2
+        stereo = bytearray(n_samples * 4)
+        for i in range(n_samples):
+            b0 = mono_bytes[i * 2]
+            b1 = mono_bytes[i * 2 + 1]
+            idx = i * 4
+            stereo[idx] = b0
+            stereo[idx + 1] = b1
+            stereo[idx + 2] = b0
+            stereo[idx + 3] = b1
+        return bytes(stereo)
+
+
 class I2SSpeakerBackend(SpeakerBackendBase):
     """Plays audio via MAX98357A I2S Mono DAC/Amp on Raspberry Pi 5 with auto format conversion."""
 
@@ -38,34 +60,65 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         logger.info(f"Speaker initialized on ALSA device {self.alsa_device}")
 
     def _unmute_and_max_alsa_mixer(self) -> None:
-        """Force ALSA mixer controls (especially Seeed Voicecard PCM) to 100% and unmuted."""
-        controls = ["PCM", "Playback", "Headphone", "Line", "HP DAC", "Line DAC", "Speaker"]
-        cards = ["seeed2micvoicec", "default"]
+        """Force ALSA mixer controls on Raspberry Pi (WM8960 / ReSpeaker 2-Mics) to 100% and unmuted."""
+        import re
+        card_id = None
+        if "hw:" in self.alsa_device or "plughw:" in self.alsa_device:
+            m = re.search(r'(?:plug)?hw:(\w+)', self.alsa_device)
+            if m:
+                card_id = m.group(1)
+
+        candidate_cards = []
+        if card_id:
+            candidate_cards.append(card_id)
+        candidate_cards.extend(["1", "0", "seeed-2mic-voicecard", "seeed2micvoicec", "wm8960-soundcard", "wm8960soundcard", "default"])
+        cards = list(dict.fromkeys(candidate_cards))
+
+        controls = ["Playback", "Speaker", "Headphone", "PCM", "Line", "HP DAC", "Line DAC", "Master"]
+        mixer_switches = [
+            "Left Output Mixer PCM",
+            "Right Output Mixer PCM",
+        ]
+
         for card in cards:
             for ctrl in controls:
+                for val in ["100%", "127", "unmute"]:
+                    try:
+                        subprocess.run(
+                            ["amixer", "-c", str(card), "sset", ctrl, val],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                        )
+                    except Exception:
+                        pass
+            for sw in mixer_switches:
                 try:
                     subprocess.run(
-                        ["amixer", "-c", card, "set", ctrl, "100%"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        check=False,
-                    )
-                    subprocess.run(
-                        ["amixer", "-c", card, "set", ctrl, "unmute"],
+                        ["amixer", "-c", str(card), "sset", sw, "on"],
                         stdout=subprocess.DEVNULL,
                         stderr=subprocess.DEVNULL,
                         check=False,
                     )
                 except Exception:
                     pass
-
+                try:
+                    subprocess.run(
+                        ["amixer", "-c", str(card), "cset", f"name='{sw} Playback Switch'", "1"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                    )
+                except Exception:
+                    pass
+        logger.info(f"Unmuted and configured ALSA mixer controls for candidate card(s): {cards[:3]}")
 
     def _stream_worker_loop(self) -> None:
         """Background worker thread feeding streaming audio chunks to a persistent aplay process."""
         import queue
         proc = None
         current_sample_rate = 24000
-        channels = "1"
+        channels = "2"  # WM8960 requires stereo (2 channels)
         
         while self._stream_running:
             try:
@@ -81,11 +134,14 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                         self._stream_proc = None
                     continue
 
+                stereo_bytes = _mono_to_stereo(audio_bytes)
+
                 if proc is None or proc.poll() is not None or current_sample_rate != sample_rate:
                     if proc is not None:
                         if proc.poll() is not None and proc.stderr:
                             err = proc.stderr.read().decode('utf-8', errors='ignore')
-                            logger.error(f"aplay failed: {err.strip()}")
+                            if err.strip():
+                                logger.error(f"aplay exited unexpectedly: {err.strip()}")
                         try:
                             if proc.stdin: proc.stdin.close()
                             proc.terminate()
@@ -106,11 +162,19 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                         self._stream_proc = proc
 
                 if proc and proc.stdin:
-                    proc.stdin.write(audio_bytes)
+                    proc.stdin.write(stereo_bytes)
                     proc.stdin.flush()
             except Exception as e:
-                if isinstance(e, (BrokenPipeError, OSError, ValueError)):
-                    logger.debug(f"Audio stream worker pipe closed: {e}")
+                err_text = ""
+                if proc is not None and proc.stderr:
+                    try:
+                        err_text = proc.stderr.read().decode('utf-8', errors='ignore').strip()
+                    except Exception:
+                        pass
+                if err_text:
+                    logger.error(f"Audio stream worker aplay error: {err_text} (exception: {e})")
+                elif isinstance(e, (BrokenPipeError, OSError, ValueError)):
+                    logger.warning(f"Audio stream worker pipe closed: {e}")
                 else:
                     logger.warning(f"Audio stream worker error: {e}")
                 if proc is not None:
@@ -237,8 +301,18 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         is_temp = clean_path != file_path
 
         try:
+            is_mp3 = file_path.endswith(".mp3")
+            if not is_mp3:
+                try:
+                    with open(file_path, "rb") as f:
+                        hdr = f.read(4)
+                        if hdr.startswith(b"ID3") or (len(hdr) >= 2 and hdr[0] == 0xFF and (hdr[1] & 0xE0) == 0xE0):
+                            is_mp3 = True
+                except Exception:
+                    pass
+
             # Try mpg123 if installed
-            if file_path.endswith(".mp3") and shutil.which("mpg123"):
+            if is_mp3 and shutil.which("mpg123"):
                 cmd = ["mpg123", "-q", "-a", self.alsa_device, file_path]
             # Try aplay on clean PCM WAV
             elif shutil.which("aplay"):

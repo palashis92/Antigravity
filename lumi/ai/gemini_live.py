@@ -530,6 +530,7 @@ class GeminiLiveClient:
         self._is_ready = False
         user_buffer = []
         lumi_buffer = []
+        turn_had_audio = False
         try:
             async for message in ws:
                 if not self._running: break
@@ -557,6 +558,7 @@ class GeminiLiveClient:
                                     if self.is_silent():
                                         logger.debug("Suppressing Gemini Live audio output: silent mode active.")
                                         continue
+                                    turn_had_audio = True
                                     audio_bytes = base64.b64decode(part["inlineData"]["data"])
                                     self._last_active_time = time.time()
                                     
@@ -572,6 +574,9 @@ class GeminiLiveClient:
                                         
                                     if getattr(self, "turn_arbiter", None):
                                         self.turn_arbiter.notify_speaker_started(duration)
+
+                                    if self.state and hasattr(self.state, "transition_to"):
+                                        self.state.transition_to(BehaviorState.SPEAKING, reason="gemini_live_speech")
 
                                     self.speaker.play_stream(audio_bytes, sample_rate=24000)
 
@@ -597,6 +602,9 @@ class GeminiLiveClient:
                         if "interrupted" in data["serverContent"]:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
                             self._speaker_active_until = 0.0
+                            turn_had_audio = False
+                            if self.state and hasattr(self.state, "transition_to"):
+                                self.state.transition_to(BehaviorState.LISTENING, reason="user_barge_in")
                             if getattr(self, "turn_arbiter", None):
                                 self.turn_arbiter.notify_speaker_stopped()
                                 self.turn_arbiter.record_barge_in(latency_ms=120.0)
@@ -651,8 +659,29 @@ class GeminiLiveClient:
                             l_text = " ".join(lumi_buffer).strip()
                             if u_text or l_text:
                                 self.event_bus.emit("conversation.turn_complete", data={"user": u_text, "lumi": l_text})
+
+                            # Dual-safety net: If Gemini generated text but no audio streamed,
+                            # synthesize via BanglaTTS and play so the robot is NEVER mute!
+                            if l_text and not turn_had_audio and not self.is_silent():
+                                logger.info(f"Gemini Live returned text without audio stream. Running fallback TTS for: '{l_text[:40]}...'")
+                                try:
+                                    tts_file = self.tts.synthesize(l_text)
+                                    if tts_file and hasattr(self.speaker, "play_file"):
+                                        self.speaker.play_file(tts_file, block=False)
+                                except Exception as e:
+                                    logger.warning(f"Fallback TTS synthesis error: {e}")
+
+                            turn_had_audio = False
                             user_buffer.clear()
                             lumi_buffer.clear()
+
+                            # Transition state back to LISTENING if awake, else IDLE
+                            if self.state and hasattr(self.state, "transition_to"):
+                                if self.is_awake():
+                                    self.state.transition_to(BehaviorState.LISTENING, reason="turn_complete_listening")
+                                else:
+                                    self.state.transition_to(BehaviorState.IDLE, reason="turn_complete_idle")
+
                             # Smoothly return arms to neutral rest pose when turn finishes
                             if self.gestures and hasattr(self.gestures, "idle_pose"):
                                 self.gestures.play_async(self.gestures.idle_pose, name="turn_complete_rest")

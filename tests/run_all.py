@@ -141,6 +141,7 @@ def main():
         ("test_mic_wm8960_detection", tp1.test_mic_wm8960_detection, ()),
         ("test_servo_slew_rate_limiter", tp1.test_servo_slew_rate_limiter, ()),
         ("test_telemetry_logger_non_blocking", tp1.test_telemetry_logger_non_blocking, ()),
+        ("test_mono_to_stereo_interleaving", tp1.test_mono_to_stereo_interleaving, ()),
         # Phase 2: Audio & Session Stability
         ("test_turn_arbiter_silence_mode", tp2.test_turn_arbiter_silence_mode, ()),
         ("test_turn_arbiter_speaker_echo_ducking", tp2.test_turn_arbiter_speaker_echo_ducking, ()),
@@ -157,6 +158,8 @@ def main():
         ("test_state_manager_watchdog_ignores_stable_states", tp4.test_state_manager_watchdog_ignores_stable_states, ()),
         ("test_persona_segregation_reset_dialogue_state", tp4.test_persona_segregation_reset_dialogue_state, ()),
         ("test_learned_rules_sqlite_persistence", tp4.test_learned_rules_sqlite_persistence, ()),
+        ("test_listening_state_transitions_to_greeting_and_observing", tp4.test_listening_state_transitions_to_greeting_and_observing, ()),
+        ("test_mem0_cloud_empty_turn_guarded", tp4.test_mem0_cloud_empty_turn_guarded, ()),
         # Phase 5: Lifelike Behavior & Fluidity
         ("test_servo_holding_torque_and_breathing_motion", tp5.test_servo_holding_torque_and_breathing_motion, ()),
         ("test_continuous_affective_eyes_modulation", tp5.test_continuous_affective_eyes_modulation, ()),
