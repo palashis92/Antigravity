@@ -80,6 +80,8 @@ class AudioTurnArbiter:
         """True if the robot speaker is playing or room reverberation is still decaying."""
         with self._lock:
             now = time.time()
+            if now >= (self._speaker_active_until + self.echo_tail_s):
+                self._is_speaker_playing = False
             return self._is_speaker_playing or (now < (self._speaker_active_until + self.echo_tail_s))
 
     # ------------------------------------------------------------------

@@ -106,10 +106,10 @@ class GeminiLiveClient:
         if getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_in_dialogue():
             return True
 
-        # If robot state is actively listening or interacting
+        # If robot state is actively listening, observing, greeting, or interacting
         if self.state and hasattr(self.state, "current_state"):
             from ..core.state_manager import BehaviorState
-            if self.state.current_state in (BehaviorState.LISTENING, BehaviorState.SPEAKING):
+            if self.state.current_state in (BehaviorState.LISTENING, BehaviorState.SPEAKING, BehaviorState.OBSERVING, BehaviorState.GREETING):
                 return True
 
         with self._awake_lock:
@@ -711,6 +711,9 @@ class GeminiLiveClient:
                             turn_had_audio = False
                             user_buffer.clear()
                             lumi_buffer.clear()
+
+                            if getattr(self, "turn_arbiter", None):
+                                self.turn_arbiter.notify_speaker_stopped()
 
                             # Transition state back to LISTENING if awake, else IDLE
                             if self.state and hasattr(self.state, "transition_to"):
