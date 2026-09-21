@@ -74,6 +74,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.SLEEP,
         BehaviorState.MEETING,
         BehaviorState.ANJUM_MODE,
+        BehaviorState.SPEAKING,
     },
     BehaviorState.OBSERVING: {
         BehaviorState.IDLE,

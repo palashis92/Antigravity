@@ -748,14 +748,14 @@ class LumiBrain:
             if _debug_audio_frames % 200 == 0:
                 logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
 
-            # 1. Push audio to Gemini Live (with proximity filtering and turn-taking arbitration)
+            # 1. Push audio to Gemini Live (with continuous real-time streaming matching cb1495d0)
             num_faces = len(getattr(self, '_last_detected_faces', []))
             is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
 
+            # Continuous streaming for Gemini Live neural VAD: only gate on speaker playback (AEC) and silence mode
+            should_stream = (not is_speaker_active) and (not self._is_silent())
             if hasattr(self, "turn_arbiter"):
-                should_stream = self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)
-            else:
-                should_stream = (not is_speaker_active) and (energy >= 100.0)
+                self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)
 
             if should_stream and self.proximity_filter.should_pass(chunk, is_overlap):
                 if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):

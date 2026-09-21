@@ -95,9 +95,22 @@ class GeminiLiveClient:
 
     def is_awake(self) -> bool:
         """Return True if the robot is currently in an active dialogue window."""
+        if self.is_silent():
+            return False
+
+        # Live connected session is always awake for continuous real-time interaction (matching cb1495d0)
+        if getattr(self, "_awake_forever", False):
+            return True
+
         # If turn_arbiter has active dialogue, we're awake (read-only — no extension)
         if getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_in_dialogue():
             return True
+
+        # If robot state is actively listening or interacting
+        if self.state and hasattr(self.state, "current_state"):
+            from ..core.state_manager import BehaviorState
+            if self.state.current_state in (BehaviorState.LISTENING, BehaviorState.SPEAKING):
+                return True
 
         with self._awake_lock:
             if not self._awake:
@@ -215,6 +228,8 @@ class GeminiLiveClient:
 
     def stop(self) -> None:
         self._running = False
+        self._awake = False
+        self._awake_forever = False
         if getattr(self, '_ws', None):
             try:
                 if self._loop and self._loop.is_running():
@@ -470,6 +485,8 @@ class GeminiLiveClient:
             pass
 
     async def _send_av_loop(self, ws: Any) -> None:
+        self._awake = True
+        self._awake_forever = True
         self._audio_queue = asyncio.Queue(maxsize=100)
         _debug_chunk_count = 0
         try:
