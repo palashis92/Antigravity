@@ -509,7 +509,7 @@ class GeminiLiveClient:
                             }))
                             _debug_chunk_count += 1
                             if _debug_chunk_count % 100 == 0:
-                                logger.info(f"🎙️ [Gemini Live] Streamed {_debug_chunk_count} live audio chunks to Gemini.")
+                                logger.info(f"🎙️ [Gemini Live] Real-time audio stream active... ({_debug_chunk_count} frames sent)")
                         except Exception as e:
                             logger.debug(f'Audio send error: {e}')
                             break
