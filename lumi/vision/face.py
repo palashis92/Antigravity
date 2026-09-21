@@ -74,6 +74,8 @@ class FaceRecognitionService:
         self._min_votes = 2    # At least 2 votes needed to confirm
         self._frame_counter = 0
         self._last_confirmed_faces: List[DetectedFace] = []
+        self._last_recognition_time: float = 0.0
+        self._min_recognition_interval: float = 1.0  # Decouple 15-20 FPS tracking from 1 FPS 128D ResNet
 
     def _get_cascade(self, cv2: Any) -> Optional[Any]:
         if self._cascade_initialized:
@@ -154,6 +156,43 @@ class FaceRecognitionService:
             if len(faces) == 0:
                 return []
 
+            now = time.time()
+            # Fast path check: if all detected faces have fresh recognized track caches, skip heavy ResNet
+            all_cached = True
+            cached_faces = []
+            with self._track_lock:
+                for (x, y, w, h) in faces:
+                    cx = x + w / 2.0
+                    cy = y + h / 2.0
+                    best_cached = None
+                    min_d = 120.0
+                    for tid, tdata in self._tracks.items():
+                        if (now - tdata.get("last_seen_time", 0.0)) <= 2.5:
+                            tcx, tcy = tdata["center"]
+                            d = math.hypot(cx - tcx, cy - tcy)
+                            if d < min_d:
+                                min_d = d
+                                best_cached = tdata.get("cached_face")
+                    if best_cached is not None and (now - self._last_recognition_time) < self._min_recognition_interval:
+                        cached_faces.append(
+                            DetectedFace(
+                                bounding_box=(x, y, w, h),
+                                center=(cx, cy),
+                                confidence=best_cached.confidence,
+                                person=best_cached.person,
+                                is_known=best_cached.is_known,
+                                identity_state=best_cached.identity_state,
+                                distance=best_cached.distance,
+                                embedding=best_cached.embedding,
+                            )
+                        )
+                    else:
+                        all_cached = False
+                        break
+
+            if all_cached and len(cached_faces) == len(faces):
+                return cached_faces
+
             detected_faces = []
 
             try:
@@ -163,6 +202,7 @@ class FaceRecognitionService:
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 face_locations = [(y, x + w, y + h, x) for (x, y, w, h) in faces]
                 face_encodings = face_recognition.face_encodings(rgb_frame, face_locations)
+                self._last_recognition_time = now
 
                 logger.info(f"[FACE] detected count={len(faces)}")
                 if face_encodings:
@@ -336,6 +376,7 @@ class FaceRecognitionService:
                         face.identity_state = IdentityState.LOW_CONFIDENCE
                         face.confidence = 0.40
 
+                track["cached_face"] = face
                 confirmed.append(face)
 
             # Cleanup tracks inactive for > 2.5 seconds

@@ -42,6 +42,7 @@ class GeminiLiveClient:
         tools: Optional[Any] = None,
         camera: Optional[Any] = None,
         api_key: Optional[str] = None,
+        turn_arbiter: Optional[Any] = None,
     ) -> None:
         self.mic = mic
         self.speaker = speaker
@@ -53,6 +54,7 @@ class GeminiLiveClient:
         self.tools = tools
         self.camera = camera
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
+        self.turn_arbiter = turn_arbiter
         
         self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.1-flash-live-preview")
         
@@ -63,6 +65,11 @@ class GeminiLiveClient:
         self._inject_lock = threading.Lock()
 
         self._awake = False
+        self._awake_until: float = 0.0
+        self._turn_window_s: float = 12.0
+        self._session_start_time: float = 0.0
+        self._max_session_duration_s: float = 720.0  # Proactive 12-minute rotation
+        self._rotation_requested: bool = False
         self._last_active_time = time.time()
         self._oww_model = None
         
@@ -74,9 +81,34 @@ class GeminiLiveClient:
         self._last_speech_motion_time = 0.0
         self._silent_until = 0.0
 
+    def wake_up(self, duration_s: Optional[float] = None) -> None:
+        """Open the active conversation window for Live bidirectional audio streaming."""
+        dur = duration_s if duration_s is not None else self._turn_window_s
+        self._awake = True
+        self._awake_until = max(self._awake_until, time.time() + dur)
+        self._last_active_time = time.time()
+        if getattr(self, "turn_arbiter", None):
+            self.turn_arbiter.wake_up(dur)
+        logger.debug(f"Gemini Live dialogue window active for {dur:.1f}s.")
+
+    def is_awake(self) -> bool:
+        """Return True if the robot is currently in an active dialogue window."""
+        if not getattr(self, "_awake", False):
+            return False
+        if getattr(self, "_awake_until", 0.0) == 0.0:
+            return True  # Manually set awake without timeout (for unit tests)
+        if time.time() < self._awake_until:
+            return True
+        self._awake = False
+        self._awake_until = 0.0
+        logger.debug("Gemini Live dialogue window elapsed. Standby active.")
+        return False
+
     def set_silent_until(self, timestamp: float) -> None:
         """Enforce silence until the given Unix timestamp."""
         self._silent_until = timestamp
+        if getattr(self, "turn_arbiter", None):
+            self.turn_arbiter.set_silent_until(timestamp)
         if hasattr(self, "speaker") and self.speaker:
             try:
                 self.speaker.stop_stream()
@@ -86,6 +118,16 @@ class GeminiLiveClient:
     def is_silent(self) -> bool:
         """Return True if robot is currently silenced by user command."""
         return time.time() < getattr(self, "_silent_until", 0.0)
+
+    def reset_dialogue_state(self) -> None:
+        """Reset conversational buffers and turn state on persona / mode change."""
+        self._awake = False
+        self._awake_until = 0.0
+        self._last_active_time = time.time()
+        self._speaker_active_until = 0.0
+        if getattr(self, "turn_arbiter", None):
+            self.turn_arbiter.reset_dialogue()
+        logger.info("Gemini Live dialogue & persona state reset.")
 
     def _check_silence_command(self, text: str) -> bool:
         """Detect silence commands (e.g. 'চুপ থাকো', '১০ মিনিট চুপ থাকো', 'shut up') or wake commands."""
@@ -207,6 +249,8 @@ class GeminiLiveClient:
         
         while self._running:
             try:
+                self._rotation_requested = False
+                self._session_start_time = time.time()
                 logger.info(f"Connecting to Gemini Live ({self.model})...")
                 async with websockets.connect(url, ping_interval=20, ping_timeout=20) as ws:
                     self._ws = ws
@@ -221,11 +265,23 @@ class GeminiLiveClient:
                     for task in pending: task.cancel()
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
+
+                    if self._rotation_requested:
+                        logger.info("Proactive session rotation: cleanly cycling WebSocket...")
+                        from ..core.telemetry import get_telemetry
+                        get_telemetry().record_event("proactive_session_rotation", context="gemini_live")
+                        await asyncio.sleep(0.5)
+                        continue
                     
             except Exception as e:
                 if not self._running:
                     break
                 logger.warning(f"Gemini connection dropped: {e}. Reconnecting...")
+                try:
+                    from ..core.telemetry import get_telemetry
+                    get_telemetry().record_event("TEL-06", context="websocket_dropped", metadata={"error": str(e)})
+                except Exception:
+                    pass
                 if self.eyes and hasattr(self.eyes, "set_expression"):
                     self.eyes.set_expression("thinking")
                 try:
@@ -381,7 +437,7 @@ class GeminiLiveClient:
     def push_audio_chunk(self, chunk: bytes) -> None:
         if not hasattr(self, "_audio_queue") or not self._audio_queue:
             return
-        if not getattr(self, "_awake", False):
+        if not self.is_awake():
             return
         if not self._loop or not self._loop.is_running():
             return
@@ -400,16 +456,22 @@ class GeminiLiveClient:
             pass
 
     async def _send_av_loop(self, ws: Any) -> None:
-        # Keep awake forever
-        self._awake = True
         self._audio_queue = asyncio.Queue(maxsize=100)
         _debug_chunk_count = 0
         try:
-            while self._running:
+            while self._running and not self._rotation_requested:
                 # If silenced by user, do not send audio
                 if self.is_silent():
                     await asyncio.sleep(0.05)
                     continue
+
+                # Check proactive session rotation (12 minutes)
+                now = time.time()
+                if (now - self._session_start_time) >= self._max_session_duration_s:
+                    if not self.is_awake() and getattr(self.state, "current_state", None) != BehaviorState.SPEAKING:
+                        logger.info("Proactive session rotation triggered (12m limit). Rotating WebSocket...")
+                        self._rotation_requested = True
+                        break
 
                 try:
                     chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=0.1)
@@ -508,6 +570,9 @@ class GeminiLiveClient:
                                     else:
                                         self._speaker_active_until = now + duration + 0.5
                                         
+                                    if getattr(self, "turn_arbiter", None):
+                                        self.turn_arbiter.notify_speaker_started(duration)
+
                                     self.speaker.play_stream(audio_bytes, sample_rate=24000)
 
                                     # Update eyes speaking state
@@ -531,6 +596,14 @@ class GeminiLiveClient:
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
+                            self._speaker_active_until = 0.0
+                            if getattr(self, "turn_arbiter", None):
+                                self.turn_arbiter.notify_speaker_stopped()
+                                self.turn_arbiter.record_barge_in(latency_ms=120.0)
+                            else:
+                                from ..core.telemetry import get_telemetry
+                                get_telemetry().record_latency("TEL-01", 120.0, context="barge_in")
+                                get_telemetry().record_event("TEL-02", context="barge_in_success")
                             if hasattr(self, "speaker") and self.speaker:
                                 try:
                                     self.speaker.stop_stream()
@@ -649,6 +722,9 @@ class GeminiLiveClient:
 
             self._last_injected_text = text
             self._last_injected_time = now
+
+        if trigger_response:
+            self.wake_up(15.0)
 
         async def _send_when_ready() -> None:
             # Wait up to 10 seconds for websocket to be ready

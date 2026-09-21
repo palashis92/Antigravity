@@ -21,6 +21,22 @@ from .expressions import EXPRESSIONS, ExpressionConfig
 
 logger = get_logger("eyes.renderer")
 
+# Continuous 2D Valence / Arousal Affective Coordinate Mappings
+EXPRESSION_AFFECT: Dict[str, Tuple[float, float]] = {
+    "neutral": (0.0, 0.0),
+    "happy": (0.8, 0.5),
+    "ecstatic": (1.0, 0.9),
+    "sad": (-0.8, -0.4),
+    "curious": (0.3, 0.6),
+    "thinking": (0.1, 0.4),
+    "surprised": (0.4, 0.9),
+    "confused": (-0.2, 0.5),
+    "sleep": (0.0, -0.9),
+    "sleepy": (0.0, -0.9),
+    "listening": (0.2, 0.3),
+    "speaking": (0.3, 0.4),
+}
+
 try:
     from PIL import Image, ImageDraw  # type: ignore
     _HAS_PIL = True
@@ -84,6 +100,12 @@ class EyeRenderer:
         self._next_glance_time = time.time() + random.uniform(2.0, 4.0)
         self._glance_end_time = 0.0
 
+        # Continuous 2D Valence / Arousal Affective Model
+        self.valence: float = 0.0      # -1.0 (sad/negative) to +1.0 (happy/positive)
+        self.arousal: float = 0.0      # -1.0 (calm/sleepy) to +1.0 (alert/excited)
+        self.target_valence: float = 0.0
+        self.target_arousal: float = 0.0
+
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.RLock()
@@ -135,8 +157,44 @@ class EyeRenderer:
                 expr = EXPRESSIONS.get("neutral")
             if expr:
                 self.target_expr = expr
+
+            # Sync continuous affective coordinates
+            aff = EXPRESSION_AFFECT.get(name_lower)
+            if aff:
+                self.target_valence, self.target_arousal = aff
+
             self._last_expr_set_time = time.time()
-            logger.debug(f"Eye expression set to '{expression_name}'")
+            logger.debug(f"Eye expression set to '{expression_name}' (V={self.target_valence:.2f}, A={self.target_arousal:.2f})")
+
+    def set_affect(self, valence: float, arousal: float, transition_s: float = 0.5) -> None:
+        """Set continuous 2D affective coordinates (Valence / Arousal).
+        
+        Args:
+            valence: -1.0 (sad/negative) to +1.0 (happy/positive)
+            arousal: -1.0 (calm/sleepy) to +1.0 (alert/excited)
+            transition_s: Duration for smooth affective interpolation
+        """
+        with self._lock:
+            self.target_valence = max(-1.0, min(1.0, float(valence)))
+            self.target_arousal = max(-1.0, min(1.0, float(arousal)))
+
+            # Map high-level flags according to affective extremes
+            if self.target_arousal <= -0.85:
+                self.is_sleeping = True
+            else:
+                self.is_sleeping = False
+
+            if self.target_valence >= 0.4:
+                self.target_expr = EXPRESSIONS.get("happy", self.target_expr)
+            elif self.target_valence <= -0.4:
+                self.target_expr = EXPRESSIONS.get("sad", self.target_expr)
+            elif self.target_arousal >= 0.6:
+                self.target_expr = EXPRESSIONS.get("curious", self.target_expr)
+            else:
+                self.target_expr = EXPRESSIONS.get("neutral", self.target_expr)
+
+            self._last_expr_set_time = time.time()
+            logger.debug(f"Eye affect target set to (V={self.target_valence:.2f}, A={self.target_arousal:.2f})")
 
     def set_speaking(self, duration_s: float = 1.0) -> None:
         """Inform eye renderer that LUMI is actively speaking for duration_s."""
@@ -406,6 +464,12 @@ class EyeRenderer:
                     is_sleeping = self.is_sleeping
                     gaze_x = self.gaze_x
                     gaze_y = self.gaze_y
+                    target_v = self.target_valence
+                    target_a = self.target_arousal
+
+                # Affective continuous lerp
+                self.valence += (target_v - self.valence) * 0.15
+                self.arousal += (target_a - self.arousal) * 0.15
                 
                 # --- Procedural Animal Override ---
                 if self._active_animal and now < self._active_animal_end:
@@ -515,11 +579,17 @@ class EyeRenderer:
 
                 # Render frames
                 if self.single_display_both_eyes:
-                    single_frame = self._draw_both_eyes_single_frame(blink_cover, breathe_delta=breathe_delta)
+                    single_frame = self._draw_both_eyes_single_frame(
+                        blink_cover, breathe_delta=breathe_delta, valence=self.valence, arousal=self.arousal
+                    )
                     self.display.draw_eyes(single_frame, None)
                 else:
-                    left_frame = self._draw_single_eye(is_left=True, blink_cover=blink_cover, breathe_delta=breathe_delta)
-                    right_frame = self._draw_single_eye(is_left=False, blink_cover=blink_cover, breathe_delta=breathe_delta)
+                    left_frame = self._draw_single_eye(
+                        is_left=True, blink_cover=blink_cover, breathe_delta=breathe_delta, valence=self.valence, arousal=self.arousal
+                    )
+                    right_frame = self._draw_single_eye(
+                        is_left=False, blink_cover=blink_cover, breathe_delta=breathe_delta, valence=self.valence, arousal=self.arousal
+                    )
                     self.display.draw_eyes(left_frame, right_frame)
             except Exception as e:
                 logger.debug(f"EyeRenderer frame error: {e}")
@@ -585,17 +655,45 @@ class EyeRenderer:
             hl_y = cy - h_radius * 0.32
             draw.ellipse([hl_x - hl_r, hl_y - hl_r, hl_x + hl_r, hl_y + hl_r], fill=(255, 255, 255))
 
-    def _draw_both_eyes_single_frame(self, blink_cover: float = 0.0, breathe_delta: float = 0.0) -> Any:
+    def _apply_affective_tint(self, base_color: Tuple[int, int, int], valence: float) -> Tuple[int, int, int]:
+        """Blend base iris color according to continuous valence (warm gold vs cool indigo)."""
+        if valence > 0.3:
+            ratio = min(0.6, (valence - 0.3) * 1.5)
+            target = (255, 215, 75)
+            return (
+                int(base_color[0] * (1.0 - ratio) + target[0] * ratio),
+                int(base_color[1] * (1.0 - ratio) + target[1] * ratio),
+                int(base_color[2] * (1.0 - ratio) + target[2] * ratio),
+            )
+        elif valence < -0.3:
+            ratio = min(0.6, (-valence - 0.3) * 1.5)
+            target = (70, 95, 160)
+            return (
+                int(base_color[0] * (1.0 - ratio) + target[0] * ratio),
+                int(base_color[1] * (1.0 - ratio) + target[1] * ratio),
+                int(base_color[2] * (1.0 - ratio) + target[2] * ratio),
+            )
+        return base_color
+
+    def _draw_both_eyes_single_frame(
+        self,
+        blink_cover: float = 0.0,
+        breathe_delta: float = 0.0,
+        valence: float = 0.0,
+        arousal: float = 0.0,
+    ) -> Any:
         """Render both Left and Right eyes side-by-side onto a single 240x240 display buffer."""
         expr = self.target_expr
         if _HAS_PIL:
             img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
             draw = ImageDraw.Draw(img)
 
-            # Colors & Dimensions from Eyes.cpp (with subtle breathing pulse)
-            color = expr.iris_color_rgb
-            base_w = max(4.0, (self.w_eye / 2.0) + (breathe_delta * 0.6))  # radius X = ~20
-            base_h = max(4.0, (self.h_eye / 2.0) + breathe_delta)           # radius Y = ~35
+            # Colors & Dimensions with affective arousal & valence modulation
+            color = self._apply_affective_tint(expr.iris_color_rgb, valence)
+            arousal_h_mult = max(0.4, min(1.35, 1.0 + arousal * 0.35))
+            arousal_w_mult = max(0.6, min(1.25, 1.0 + arousal * 0.15))
+            base_w = max(4.0, ((self.w_eye / 2.0) + (breathe_delta * 0.6)) * arousal_w_mult)  # radius X = ~20
+            base_h = max(4.0, ((self.h_eye / 2.0) + breathe_delta) * arousal_h_mult)           # radius Y = ~35
 
             # Dynamic squash factor
             left_blink = blink_cover
@@ -607,7 +705,7 @@ class EyeRenderer:
             left_h = max(0.0, base_h * (1.0 - left_blink))
             right_h = max(0.0, base_h * (1.0 - right_blink))
 
-            is_happy = expr.name.lower() in ["happy", "ecstatic"]
+            is_happy = (expr.name.lower() in ["happy", "ecstatic"]) or (valence > 0.35)
 
             # Eye Centers with Gaze offset
             cy = self.y_eye_center + self._smooth_gaze_y
@@ -630,21 +728,34 @@ class EyeRenderer:
                 "mode": "single_display_both_eyes",
                 "expression": expr.name,
                 "blink": blink_cover,
+                "valence": valence,
+                "arousal": arousal,
             }
 
-    def _draw_single_eye(self, is_left: bool, blink_cover: float = 0.0, breathe_delta: float = 0.0) -> Any:
+    def _draw_single_eye(
+        self,
+        is_left: bool,
+        blink_cover: float = 0.0,
+        breathe_delta: float = 0.0,
+        valence: float = 0.0,
+        arousal: float = 0.0,
+    ) -> Any:
         """Render a single full-screen 240x240 round eye buffer for dual separate displays."""
         expr = self.target_expr
         cx = self.width / 2.0 + self._smooth_gaze_x
         cy = self.height / 2.0 + self._smooth_gaze_y
-        r_w = max(4.0, (self.w_eye * 1.2) + (breathe_delta * 0.8))
-        r_h = max(0.0, ((self.h_eye * 1.2) + (breathe_delta * 1.2)) * (1.0 - blink_cover))
+        color = self._apply_affective_tint(expr.iris_color_rgb, valence)
+        arousal_h_mult = max(0.4, min(1.35, 1.0 + arousal * 0.35))
+        arousal_w_mult = max(0.6, min(1.25, 1.0 + arousal * 0.15))
+        r_w = max(4.0, ((self.w_eye * 1.2) + (breathe_delta * 0.8)) * arousal_w_mult)
+        r_h = max(0.0, ((self.h_eye * 1.2) + (breathe_delta * 1.2)) * (1.0 - blink_cover) * arousal_h_mult)
+        is_happy = (expr.name.lower() in ["happy", "ecstatic"]) or (valence > 0.35)
 
         if _HAS_PIL:
             img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
             draw = ImageDraw.Draw(img)
             self._draw_eye_pill(
-                draw, cx, cy, r_w, r_h, expr.iris_color_rgb, is_closed=(blink_cover >= 0.85)
+                draw, cx, cy, r_w, r_h, color, is_happy=is_happy, is_closed=(blink_cover >= 0.85)
             )
             return img
         else:
@@ -653,4 +764,6 @@ class EyeRenderer:
                 "expression": expr.name,
                 "center": (cx, cy),
                 "blink": blink_cover,
+                "valence": valence,
+                "arousal": arousal,
             }

@@ -24,6 +24,7 @@ class MockServoDriver(ServoDriverBase):
         self.is_initialized = False
         self.channel_angles: Dict[int, float] = {}
         self.channel_pulses: Dict[int, int] = {}
+        self.released_channels: set[int] = set()
 
     def initialize(self) -> bool:
         self.is_initialized = True
@@ -32,15 +33,18 @@ class MockServoDriver(ServoDriverBase):
 
     def set_pwm_us(self, channel: int, pulse_us: int) -> None:
         self.channel_pulses[channel] = pulse_us
+        self.released_channels.discard(channel)
         logger.debug(f"[MOCK] Servo channel {channel} pulse set to {pulse_us} us")
 
     def set_angle(self, channel: int, angle_deg: float) -> None:
         self.channel_angles[channel] = angle_deg
+        self.released_channels.discard(channel)
         logger.debug(f"[MOCK] Servo channel {channel} angle set to {angle_deg:.1f}°")
 
     def release_channel(self, channel: int) -> None:
         if channel in self.channel_angles:
             del self.channel_angles[channel]
+        self.released_channels.add(channel)
         logger.debug(f"[MOCK] Servo channel {channel} released (de-energized).")
 
     def shutdown(self) -> None:

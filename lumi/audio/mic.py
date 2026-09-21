@@ -32,7 +32,26 @@ class SystemMicBackend(MicBackendBase):
         self._mono_queue: queue.Queue = queue.Queue(maxsize=50)  # Processed mono
         self._thread: Optional[threading.Thread] = None
         self._spatial = None
+        self._detect_alsa_device()
         self._init_spatial()
+
+    def _detect_alsa_device(self) -> None:
+        """Find the ReSpeaker 2-Mics Pi HAT capture card automatically if available."""
+        if self.alsa_device != "default":
+            return
+        try:
+            res = subprocess.run(["arecord", "-l"], capture_output=True, text=True)
+            for line in res.stdout.splitlines():
+                lower = line.lower()
+                if "seeed" in lower or "wm8960" in lower or "voicecard" in lower:
+                    parts = line.split(":")
+                    if parts and "card" in parts[0].lower():
+                        card_num = parts[0].lower().replace("card", "").strip()
+                        self.alsa_device = f"plughw:{card_num},0"
+                        logger.info(f"Auto-detected ReSpeaker 2-Mics capture device at '{self.alsa_device}'.")
+                        return
+        except Exception as e:
+            logger.debug(f"arecord device auto-detection error: {e}")
 
     def _init_spatial(self) -> None:
         """Initialize spatial audio processor (graceful fallback)."""

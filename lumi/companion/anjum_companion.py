@@ -47,6 +47,12 @@ class AnjumCompanionEngine:
         self.counting_target = 1  # Next number LUMI expects or prompts
         self._stimulus_index = 0
 
+        # Adaptive Interaction & Metric Tracking
+        self.vocalization_count: int = 0
+        self.unanswered_prompt_count: int = 0
+        self.engagement_level: str = "high"  # "high", "medium", "calm"
+        self._last_prompt_time: float = 0.0
+
         # Stimuli pools
         self._counting_prompts = [
             "আঞ্জুম আপু! আমাকে একটু গণনা শেখাও না! বলো তো ১!",
@@ -83,6 +89,10 @@ class AnjumCompanionEngine:
         self.last_seen_time = now
         self.last_stimulus_time = now + 1.0  # slight delay before first prompt
         self.counting_target = 1
+        self.vocalization_count = 0
+        self.unanswered_prompt_count = 0
+        self.engagement_level = "high"
+        self._last_prompt_time = now
         logger.info("AnjumCompanionEngine ACTIVATED.")
         return "আরেহ্! আমাদের মিষ্টি আঞ্জুম চলে এসেছে! কেমন আছো আঞ্জুম সোনা?"
 
@@ -90,6 +100,8 @@ class AnjumCompanionEngine:
         """Called when Anjum leaves or mode is exited."""
         self.is_active = False
         self.counting_target = 1
+        self.vocalization_count = 0
+        self.unanswered_prompt_count = 0
         logger.info("AnjumCompanionEngine DEACTIVATED.")
         return "আঞ্জুম আবার এসো কিন্তু! আমি তোমার জন্য এখানেই অপেক্ষা করব।"
 
@@ -112,7 +124,17 @@ class AnjumCompanionEngine:
             return None
 
         self.last_stimulus_time = current
-        return self._get_next_stimulus()
+        self._last_prompt_time = current
+
+        # Adaptive pacing: if 2 or more prompts went unanswered, switch to lower-effort stimulus (animal/fun)
+        if self.unanswered_prompt_count >= 2:
+            self.engagement_level = "calm"
+            stimulus = random.choice(self._animal_prompts)
+        else:
+            stimulus = self._get_next_stimulus()
+
+        self.unanswered_prompt_count += 1
+        return stimulus
 
     def _get_next_stimulus(self) -> str:
         """Rotate through engaging categories to keep her auditory interest high."""
@@ -137,7 +159,17 @@ class AnjumCompanionEngine:
         if not self.is_active or not text.strip():
             return None
 
-        self.last_stimulus_time = time.time()
+        now = time.time()
+        self.last_stimulus_time = now
+        self.vocalization_count += 1
+        self.unanswered_prompt_count = 0
+
+        # Fast response (< 4.0s) indicates high engagement
+        if (now - self._last_prompt_time) < 4.0:
+            self.engagement_level = "high"
+        else:
+            self.engagement_level = "medium"
+
         clean = text.lower().strip()
         # Strip punctuation to handle inputs like "এক!" or "2?"
         clean = re.sub(r'[।!?.,;:\'"()\[\]{}]', '', clean).strip()
@@ -147,6 +179,7 @@ class AnjumCompanionEngine:
             if re.search(r'\b' + re.escape(word) + r'\b', clean) or clean == word:
                 next_num = num + 1
                 if next_num <= 10:
+                    self.counting_target = next_num
                     bn_next = _BANGLA_DIGITS[next_num]
                     bn_current = _BANGLA_DIGITS[num]
                     responses = [
@@ -156,6 +189,7 @@ class AnjumCompanionEngine:
                     ]
                     return random.choice(responses)
                 else:
+                    self.counting_target = 10
                     return "ওয়াও আঞ্জুম! তুমি তো পুরো ১০ পর্যন্ত গুনে ফেলেছো! তুমি অনেক জিনিয়াস মেয়ে! সাবাশ!"
 
         # 2. Name / Identity responses
@@ -169,3 +203,34 @@ class AnjumCompanionEngine:
             "ওয়াও! কত সুন্দর কথা! তুমি তো অনেক লক্ষ্মী মেয়ে!",
         ]
         return random.choice(generic_praises)
+
+    def handle_vocalization_detected(self, duration_s: float = 0.5, energy: float = 500.0) -> Optional[str]:
+        """Closed-loop acoustic detection for non-lexical sounds, babbles, or phonemes.
+        
+        Immediately reinforces child vocalization effort even if speech-to-text
+        cannot resolve clean words.
+        """
+        if not self.is_active:
+            return None
+
+        now = time.time()
+        self.last_stimulus_time = now
+        self.vocalization_count += 1
+        self.unanswered_prompt_count = 0
+        self.engagement_level = "high"
+
+        praises = [
+            "বাহ্! আঞ্জুম সোনা কিছু বলেছে! দারুণ হয়েছে সোনা! আরেকবার বলো তো!",
+            "সাবাশ আঞ্জুম! কী মিষ্টি গলা তোমার! আরেকবার শুনি সোনা!",
+            "ওয়াও! কত সুন্দর আওয়াজ! বলো তো সোনা, আরও বলো!",
+        ]
+        return random.choice(praises)
+
+    def get_session_metrics(self) -> dict:
+        """Return session analytics for speech therapy progress tracking."""
+        return {
+            "vocalizations": self.vocalization_count,
+            "unanswered_prompts": self.unanswered_prompt_count,
+            "engagement_level": self.engagement_level,
+            "counting_target": self.counting_target,
+        }

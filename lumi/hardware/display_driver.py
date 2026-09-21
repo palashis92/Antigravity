@@ -179,6 +179,7 @@ class GC9A01DisplayDriver(DisplayBackendBase):
         left_rst_pin: int = 25,
         right_dc_pin: int = 23,
         right_rst_pin: int = 22,
+        single_display: bool = True,
     ) -> None:
         self.spi_speed_hz = spi_speed_hz
         self.width = width
@@ -187,6 +188,7 @@ class GC9A01DisplayDriver(DisplayBackendBase):
         self.left_rst_pin = left_rst_pin
         self.right_dc_pin = right_dc_pin
         self.right_rst_pin = right_rst_pin
+        self.single_display = single_display
         self._is_hardware = False
         self._spi_left: Optional[Any] = None
         self._spi_right: Optional[Any] = None
@@ -198,40 +200,43 @@ class GC9A01DisplayDriver(DisplayBackendBase):
         try:
             import spidev  # type: ignore
 
-            # Initialize GPIO controllers — one per display with independent DC/RST pins
+            # Initialize Left Eye GPIO (CE0) — used for single display or dual left eye
             self._gpio_left = GPIOController(
                 dc_pin=self.left_dc_pin, rst_pin=self.left_rst_pin, label="left-eye"
             )
-            self._gpio_right = GPIOController(
-                dc_pin=self.right_dc_pin, rst_pin=self.right_rst_pin, label="right-eye"
-            )
-
-            # Hardware Reset each display independently
             self._reset_display(self._gpio_left)
-            self._reset_display(self._gpio_right)
 
-            # Display 0 (Left Eye): SPI Bus 0, Device 0 (CE0)
+            # Display 0 (Left / Primary Eye): SPI Bus 0, Device 0 (CE0)
             try:
                 self._spi_left = spidev.SpiDev()
                 self._spi_left.open(0, 0)
                 self._spi_left.max_speed_hz = self.spi_speed_hz
                 self._spi_left.mode = 0
                 self._send_init_sequence(self._spi_left, self._gpio_left)
-                logger.info(f"GC9A01 Left Eye (CE0) initialized @ {self.spi_speed_hz / 1e6:.1f}MHz.")
+                mode_str = "Single Display (CE0 only)" if self.single_display else "Left Eye (CE0)"
+                logger.info(f"GC9A01 {mode_str} initialized @ {self.spi_speed_hz / 1e6:.1f}MHz.")
             except Exception as e:
-                logger.warning(f"Could not open SPI 0.0 (left eye): {e}")
+                logger.warning(f"Could not open SPI 0.0 (left/primary eye): {e}")
                 self._spi_left = None
 
-            # Display 1 (Right Eye): SPI Bus 0, Device 1 (CE1)
-            try:
-                self._spi_right = spidev.SpiDev()
-                self._spi_right.open(0, 1)
-                self._spi_right.max_speed_hz = self.spi_speed_hz
-                self._spi_right.mode = 0
-                self._send_init_sequence(self._spi_right, self._gpio_right)
-                logger.info(f"GC9A01 Right Eye (CE1) initialized @ {self.spi_speed_hz / 1e6:.1f}MHz.")
-            except Exception as e:
-                logger.warning(f"Could not open SPI 0.1 (right eye): {e}")
+            # Display 1 (Right Eye): SPI Bus 0, Device 1 (CE1) — only if dual displays physically wired
+            if not self.single_display:
+                self._gpio_right = GPIOController(
+                    dc_pin=self.right_dc_pin, rst_pin=self.right_rst_pin, label="right-eye"
+                )
+                self._reset_display(self._gpio_right)
+                try:
+                    self._spi_right = spidev.SpiDev()
+                    self._spi_right.open(0, 1)
+                    self._spi_right.max_speed_hz = self.spi_speed_hz
+                    self._spi_right.mode = 0
+                    self._send_init_sequence(self._spi_right, self._gpio_right)
+                    logger.info(f"GC9A01 Right Eye (CE1) initialized @ {self.spi_speed_hz / 1e6:.1f}MHz.")
+                except Exception as e:
+                    logger.warning(f"Could not open SPI 0.1 (right eye): {e}")
+                    self._spi_right = None
+            else:
+                self._gpio_right = None
                 self._spi_right = None
 
             if self._spi_left is not None or self._spi_right is not None:

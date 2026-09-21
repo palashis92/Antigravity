@@ -29,6 +29,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         self._stream_proc: Optional[subprocess.Popen] = None
         self._stream_queue: queue.Queue = queue.Queue()
         self._stream_running = True
+        self._detect_alsa_device()
         self._stream_thread = threading.Thread(
             target=self._stream_worker_loop, daemon=True, name="I2SStreamWorker"
         )
@@ -141,20 +142,36 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             self._stream_proc = None
 
     def _detect_alsa_device(self) -> None:
-        """Find the MAX98357A card index automatically if available."""
+        """Find the ReSpeaker 2-Mics (WM8960) or MAX98357A card index automatically if available."""
+        if self.alsa_device != "default":
+            return
         try:
             res = subprocess.run(["aplay", "-l"], capture_output=True, text=True)
-            for line in res.stdout.splitlines():
-                if "MAX98357A" in line or "max98357a" in line or "i2s" in line.lower():
-                    # Extract card number, e.g. "card 1: MAX98357A"
+            lines = res.stdout.splitlines()
+
+            # Priority 1: Check for ReSpeaker 2-Mics Pi HAT (WM8960 / seeed)
+            for line in lines:
+                lower = line.lower()
+                if "seeed" in lower or "wm8960" in lower or "voicecard" in lower:
                     parts = line.split(":")
-                    if parts and "card" in parts[0]:
-                        card_num = parts[0].replace("card", "").strip()
+                    if parts and "card" in parts[0].lower():
+                        card_num = parts[0].lower().replace("card", "").strip()
+                        self.alsa_device = f"plughw:{card_num},0"
+                        logger.info(f"Auto-detected ReSpeaker 2-Mics (WM8960) at ALSA device '{self.alsa_device}'.")
+                        return
+
+            # Priority 2: Check for MAX98357A I2S DAC
+            for line in lines:
+                lower = line.lower()
+                if "max98357a" in lower or "i2s" in lower:
+                    parts = line.split(":")
+                    if parts and "card" in parts[0].lower():
+                        card_num = parts[0].lower().replace("card", "").strip()
                         self.alsa_device = f"plughw:{card_num},0"
                         logger.info(f"Auto-detected MAX98357A at ALSA device '{self.alsa_device}'.")
                         return
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"ALSA device auto-detection error: {e}")
 
     def _convert_to_clean_wav(self, input_path: str) -> str:
         """Convert MP3/compressed audio to 16-bit 44.1kHz Stereo PCM WAV for clean I2S DAC output."""

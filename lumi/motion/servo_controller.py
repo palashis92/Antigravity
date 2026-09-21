@@ -52,6 +52,11 @@ class ServoController:
         self.target_angles: Dict[str, float] = {}
         self._last_move_time: float = time.time()
         self._is_relaxed: bool = False
+        self.holding_torque: bool = True
+        self.breathing_enabled: bool = True
+        self.breathing_amplitude: float = 1.2
+        self.breathing_frequency: float = 0.28
+        self._is_holding_tilt: bool = False
         self._lock = threading.RLock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -205,19 +210,50 @@ class ServoController:
             self._thread.start()
 
     def _auto_relax_worker(self) -> None:
-        """Daemon worker loop checking servo idle timeout to protect hardware."""
+        """Daemon worker loop checking servo idle timeout and running breathing micro-motion."""
         while self._running:
-            time.sleep(0.5)
+            time.sleep(0.1)
             if not self._running:
                 break
             now = time.time()
+            should_relax = False
             with self._lock:
                 if (
                     not self._is_relaxed
                     and self.auto_relax_delay_s > 0
                     and (now - self._last_move_time >= self.auto_relax_delay_s)
                 ):
-                    self.relax_all()
+                    should_relax = True
+            if should_relax:
+                self.relax_all(keep_tilt_holding=True)
+
+            if self._is_relaxed and self.breathing_enabled:
+                self.breathing_tick(now)
+
+    def breathing_tick(self, t: Optional[float] = None) -> float:
+        """Perform subtle sinusoidal breathing micro-motion on head tilt axis during idle.
+        
+        Period: ~3.57s (f = 0.28 Hz), Amplitude: +-1.2 degrees.
+        Returns the current computed tilt offset angle.
+        """
+        now = t if t is not None else time.time()
+        offset = self.breathing_amplitude * math.sin(2.0 * math.pi * self.breathing_frequency * now)
+        if not self.breathing_enabled:
+            return offset
+
+        with self._lock:
+            if not self._is_relaxed and not self._is_holding_tilt:
+                return offset
+            if "head_tilt" not in self.channels:
+                return offset
+            cal = self.channels["head_tilt"]
+            target_angle = max(cal.min_angle, min(cal.max_angle, cal.home_angle + offset))
+            pulse = self.angle_to_pulse_us("head_tilt", target_angle)
+            try:
+                self.driver.set_pwm_us(cal.channel, pulse)
+            except OSError as e:
+                logger.debug(f"Breathing tick I2C note: {e}")
+        return offset
 
     def home_all(self, duration_s: float = 0.5) -> None:
         """Move all calibrated channels to their safe home positions."""
@@ -292,8 +328,13 @@ class ServoController:
                 self.set_angle_immediate(k, tgt)
             return
 
-        steps = max(5, int(duration_s * 50))  # 50 Hz interpolation loop
-        dt = duration_s / steps
+        # Slew-rate velocity limit (max 360 deg/sec) to avoid violent in-rush current spikes
+        max_delta = max((abs(valid_targets[k] - start_angles[k]) for k in valid_targets), default=0.0)
+        min_duration = max_delta / 360.0 if max_delta > 0 else 0.0
+        effective_duration = max(duration_s, min_duration)
+
+        steps = max(5, int(effective_duration * 50))  # 50 Hz interpolation loop
+        dt = effective_duration / steps
 
         for step in range(1, steps + 1):
             t = step / steps
@@ -325,16 +366,47 @@ class ServoController:
             self._is_relaxed = False
         self._save_state_to_disk()
 
-    def relax_all(self) -> None:
-        """De-energize all servo channels to prevent humming and heating."""
+    def relax_all(self, keep_tilt_holding: bool = True) -> None:
+        """De-energize non-essential servo channels to prevent humming and heating.
+        
+        If keep_tilt_holding is True and self.holding_torque is True, maintains
+        active low-duty holding PWM on head_tilt (channel 0) to prevent the head
+        from sagging or dropping limp due to gravity.
+        """
         with self._lock:
+            tilt_cal = self.channels.get("head_tilt")
+            tilt_ch_num = tilt_cal.channel if tilt_cal else 0
+            released_channels = set()
+
             for name, cal in self.channels.items():
+                if cal.channel in released_channels:
+                    continue
+                if keep_tilt_holding and self.holding_torque and cal.channel == tilt_ch_num:
+                    continue
                 try:
                     self.driver.release_channel(cal.channel)
+                    released_channels.add(cal.channel)
                 except OSError as e:
                     logger.warning(f"I2C error relaxing servo {name} (ch{cal.channel}): {e}")
+
+            if keep_tilt_holding and self.holding_torque and tilt_cal:
+                self._is_holding_tilt = True
+                home_angle = tilt_cal.home_angle
+                pulse = self.angle_to_pulse_us("head_tilt", home_angle)
+                try:
+                    self.driver.set_pwm_us(tilt_ch_num, pulse)
+                except OSError as e:
+                    logger.warning(f"I2C error setting holding torque on head_tilt (ch{tilt_ch_num}): {e}")
+            else:
+                if tilt_cal and tilt_ch_num not in released_channels:
+                    try:
+                        self.driver.release_channel(tilt_ch_num)
+                    except OSError:
+                        pass
+                self._is_holding_tilt = False
+
             self._is_relaxed = True
-            logger.debug("All servo channels relaxed.")
+            logger.debug(f"Servo channels relaxed (holding_tilt={self._is_holding_tilt}).")
 
     def shutdown(self) -> None:
         """Stop controller and park servos."""
@@ -345,6 +417,6 @@ class ServoController:
             except Exception:
                 pass
         self.home_all(duration_s=0.3)
-        self.relax_all()
+        self.relax_all(keep_tilt_holding=False)
         self.driver.shutdown()
         logger.info("ServoController shut down cleanly.")

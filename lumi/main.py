@@ -70,6 +70,7 @@ class LumiApplication:
         )
 
         # 3b. Display & Procedural Eye Renderer
+        is_single_display = settings.display.single_display_both_eyes or not settings.display.dual_eyes
         if settings.display.backend == "gc9a01_spi":
             # Extract per-eye DC/RST pin numbers from hardware_config.yaml
             left_disp_cfg = settings.hardware.displays.get("left_eye", {})
@@ -82,6 +83,7 @@ class LumiApplication:
                 left_rst_pin=left_disp_cfg.get("rst_pin", 25),
                 right_dc_pin=right_disp_cfg.get("dc_pin", 23),
                 right_rst_pin=right_disp_cfg.get("rst_pin", 22),
+                single_display=is_single_display,
             )
         else:
             self.display_backend = MockDisplayBackend(

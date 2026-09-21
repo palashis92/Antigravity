@@ -21,6 +21,11 @@ import tests.test_anjum_mode as tanjum
 import tests.test_audio as taud
 import tests.test_identity_pipeline as tip
 import tests.test_improvements as timp
+import tests.test_phase1_hardware_telemetry as tp1
+import tests.test_phase2_audio_session as tp2
+import tests.test_phase3_vision_perception as tp3
+import tests.test_phase4_architecture_fsm as tp4
+import tests.test_phase5_lifelike_behavior as tp5
 
 
 class DummyMonkeypatch:
@@ -130,6 +135,33 @@ def main():
         ("test_setup_prompt_injects_owner_facts", timp.test_setup_prompt_injects_owner_facts, ()),
         ("test_camera_interface_micro_caching", timp.test_camera_interface_micro_caching, ()),
         ("test_mem0_deterministic_bengali_fact_extraction", timp.test_mem0_deterministic_bengali_fact_extraction, ()),
+        ("test_display_driver_single_display_ce0_only", tp1.test_display_driver_single_display_ce0_only, ()),
+        ("test_display_driver_dual_display_flag", tp1.test_display_driver_dual_display_flag, ()),
+        ("test_speaker_wm8960_detection", tp1.test_speaker_wm8960_detection, ()),
+        ("test_mic_wm8960_detection", tp1.test_mic_wm8960_detection, ()),
+        ("test_servo_slew_rate_limiter", tp1.test_servo_slew_rate_limiter, ()),
+        ("test_telemetry_logger_non_blocking", tp1.test_telemetry_logger_non_blocking, ()),
+        # Phase 2: Audio & Session Stability
+        ("test_turn_arbiter_silence_mode", tp2.test_turn_arbiter_silence_mode, ()),
+        ("test_turn_arbiter_speaker_echo_ducking", tp2.test_turn_arbiter_speaker_echo_ducking, ()),
+        ("test_turn_arbiter_dialogue_window_and_ambient_rejection", tp2.test_turn_arbiter_dialogue_window_and_ambient_rejection, ()),
+        ("test_gemini_live_awake_gating", tp2.test_gemini_live_awake_gating, ()),
+        ("test_gemini_live_inject_context_wakes_dialogue", tp2.test_gemini_live_inject_context_wakes_dialogue, ()),
+        ("test_gemini_live_barge_in_telemetry", tp2.test_gemini_live_barge_in_telemetry, ()),
+        # Phase 3: Vision & Perception Throughput
+        ("test_face_recognition_track_caching_throughput", tp3.test_face_recognition_track_caching_throughput, ()),
+        ("test_target_lost_search_hysteresis_and_smooth_pan", tp3.test_target_lost_search_hysteresis_and_smooth_pan, ()),
+        ("test_anjum_mode_three_frame_confirmation_and_adult_exit", tp3.test_anjum_mode_three_frame_confirmation_and_adult_exit, ()),
+        # Phase 4: Architecture & FSM Robustness
+        ("test_state_manager_watchdog_recovers_stuck_transient_state", tp4.test_state_manager_watchdog_recovers_stuck_transient_state, ()),
+        ("test_state_manager_watchdog_ignores_stable_states", tp4.test_state_manager_watchdog_ignores_stable_states, ()),
+        ("test_persona_segregation_reset_dialogue_state", tp4.test_persona_segregation_reset_dialogue_state, ()),
+        ("test_learned_rules_sqlite_persistence", tp4.test_learned_rules_sqlite_persistence, ()),
+        # Phase 5: Lifelike Behavior & Fluidity
+        ("test_servo_holding_torque_and_breathing_motion", tp5.test_servo_holding_torque_and_breathing_motion, ()),
+        ("test_continuous_affective_eyes_modulation", tp5.test_continuous_affective_eyes_modulation, ()),
+        ("test_instant_local_acoustic_reflex", tp5.test_instant_local_acoustic_reflex, ()),
+        ("test_anjum_closed_loop_adaptive_therapy", tp5.test_anjum_closed_loop_adaptive_therapy, ()),
     ]
 
     for name, fn, args in tests_to_run:

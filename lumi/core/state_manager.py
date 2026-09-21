@@ -48,6 +48,16 @@ STATE_EYE_EXPRESSIONS: Dict[BehaviorState, str] = {
     BehaviorState.ANJUM_MODE: "excited",
 }
 
+# Transient states subject to watchdog timeout recovery
+TRANSIENT_STATES: Set[BehaviorState] = {
+    BehaviorState.GREETING,
+    BehaviorState.THINKING,
+    BehaviorState.LISTENING,
+    BehaviorState.VISION_ANALYSIS,
+    BehaviorState.CHESS_ANALYSIS,
+    BehaviorState.SEARCHING,
+}
+
 
 # Valid state transitions matrix
 VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
@@ -162,6 +172,8 @@ class StateManager:
         self._state_entered_time: float = time.time()
         self._listeners: List[Callable[[BehaviorState, BehaviorState], None]] = []
         self._history: List[tuple[BehaviorState, float]] = [(initial_state, self._state_entered_time)]
+        self._watchdog_running: bool = False
+        self._watchdog_thread: Optional[threading.Thread] = None
         logger.info(f"StateManager initialized in state: {initial_state.value}")
 
     @property
@@ -240,3 +252,66 @@ class StateManager:
                 listener(old_state, state)
             except Exception as e:
                 logger.error(f"Error in state listener {listener}: {e}", exc_info=True)
+
+    def check_watchdog(self, now: Optional[float] = None, timeout_s: float = 15.0) -> bool:
+        """Check if current state is a transient state that has exceeded timeout_s.
+        
+        If stuck, automatically forces transition to IDLE and emits TEL-04 telemetry.
+        Returns True if a watchdog recovery was triggered.
+        """
+        current_time = now if now is not None else time.time()
+        with self._lock:
+            if self._current_state in TRANSIENT_STATES:
+                elapsed = current_time - self._state_entered_time
+                if elapsed >= timeout_s:
+                    stuck_state = self._current_state
+                    logger.warning(
+                        f"⚠️ [WATCHDOG] State '{stuck_state.value}' stuck for {elapsed:.1f}s (>{timeout_s}s). "
+                        "Auto-recovering to IDLE."
+                    )
+                    try:
+                        from .telemetry import get_telemetry
+                        get_telemetry().record_event(
+                            "TEL-04",
+                            context="watchdog_reset",
+                            metadata={"from_state": stuck_state.value, "stuck_duration_s": elapsed},
+                        )
+                    except Exception:
+                        pass
+
+                    self.force_state(BehaviorState.IDLE, reason=f"watchdog_timeout_from_{stuck_state.value}")
+                    return True
+        return False
+
+    def start_watchdog(self, timeout_s: float = 15.0, interval_s: float = 1.0) -> None:
+        """Start a background daemon thread that periodically checks for stuck states."""
+        with self._lock:
+            if self._watchdog_running:
+                return
+            self._watchdog_running = True
+            self._watchdog_thread = threading.Thread(
+                target=self._watchdog_loop,
+                args=(timeout_s, interval_s),
+                daemon=True,
+                name="StateWatchdog",
+            )
+            self._watchdog_thread.start()
+        logger.info(f"StateWatchdog active (timeout={timeout_s}s, interval={interval_s}s).")
+
+    def stop_watchdog(self) -> None:
+        """Stop the background watchdog thread."""
+        self._watchdog_running = False
+        thread = getattr(self, "_watchdog_thread", None)
+        if thread and thread.is_alive():
+            try:
+                thread.join(timeout=1.0)
+            except Exception:
+                pass
+
+    def _watchdog_loop(self, timeout_s: float, interval_s: float) -> None:
+        while self._watchdog_running:
+            try:
+                self.check_watchdog(timeout_s=timeout_s)
+            except Exception as e:
+                logger.debug(f"Watchdog error: {e}")
+            time.sleep(interval_s)

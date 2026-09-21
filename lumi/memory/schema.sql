@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS system_kv (
     updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS learned_rules (
+    id TEXT PRIMARY KEY,
+    user_feedback TEXT NOT NULL,
+    adapted_rule TEXT NOT NULL,
+    category TEXT NOT NULL DEFAULT 'general',
+    created_at TEXT NOT NULL,
+    timestamp REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_rules_category ON learned_rules(category);
+
 -- =========================================================================
 -- Full-Text Search (FTS5) for intelligent fact retrieval
 -- Replaces dumb LIKE '%query%' with tokenized, BM25-ranked search

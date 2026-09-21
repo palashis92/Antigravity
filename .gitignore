@@ -44,4 +44,6 @@ Thumbs.db
 # Temporary execution files
 .tmp/
 data/
+custom_data/
+.agents/
 

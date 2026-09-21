@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 import threading
 import time
 from typing import Any, Optional
@@ -93,7 +94,12 @@ class LumiBrain:
         self._voice_buffer: bytearray = bytearray()  # Buffer for voice enrollment
         self._voice_buffer_lock = threading.Lock()
         self._enrolling_voice_for: Optional[str] = None  # Person ID being enrolled
-        
+
+        # Instant Local Acoustic Reflex (<150ms)
+        self._last_acoustic_reflex_time: float = 0.0
+        self._acoustic_reflex_cooldown: float = 1.2
+        self._acoustic_reflex_enabled: bool = True
+
         self.tts = BanglaTTS()
 
         # Speech-to-Text & Meeting Subsystems
@@ -112,6 +118,7 @@ class LumiBrain:
         from ..companion.anjum_companion import AnjumCompanionEngine
         self.anjum_companion = AnjumCompanionEngine(stimulus_cooldown=7.0)
         self._last_anjum_seen_time = 0.0
+        self._anjum_consecutive_frames = 0
 
         # AI & Reasoning Subsystems
         self.tools = ToolRegistry()
@@ -286,8 +293,10 @@ class LumiBrain:
         )
 
         from ..ai.gemini_live import GeminiLiveClient
+        from ..audio.turn_arbiter import AudioTurnArbiter
         
         self.conversation = ConversationEngine(self.memory, self.tools)
+        self.turn_arbiter = AudioTurnArbiter()
         self.realtime_voice = GeminiLiveClient(
             mic=self.mic,
             speaker=self.speaker,
@@ -298,6 +307,7 @@ class LumiBrain:
             event_bus=self.event_bus,
             tools=self.tools,
             camera=self.camera,
+            turn_arbiter=self.turn_arbiter,
         )
         self.chess_engine = ChessAnalysisEngine()
         self.reminders = ReminderScheduler(self.memory, self.event_bus)
@@ -326,10 +336,10 @@ class LumiBrain:
 
         # Learned behavioral rules store and temporal tracking
         from ..memory.learned_rules import LearnedRulesStore
-        from pathlib import Path
         data_dir = getattr(getattr(self, "settings", None), "app", None)
         data_dir_path = getattr(data_dir, "data_dir", "data") if data_dir else "data"
-        self.learned_rules = LearnedRulesStore(Path(data_dir_path) / "learned_rules.json")
+        db_instance = getattr(self.memory, "db", None)
+        self.learned_rules = LearnedRulesStore(Path(data_dir_path) / "learned_rules.json", db=db_instance)
         self._person_first_seen_date: Dict[str, str] = {}
         self._person_last_greeting_time_str: Dict[str, str] = {}
 
@@ -730,20 +740,26 @@ class LumiBrain:
             # Software AEC Gating: check if robot speaker is currently active
             speaker_until = getattr(getattr(self, "realtime_voice", None), "_speaker_active_until", 0.0)
             is_speaker_active = (time.time() < speaker_until) or (hasattr(self, "speaker") and getattr(self.speaker, "is_playing", False))
+            if hasattr(self, "turn_arbiter"):
+                is_speaker_active = is_speaker_active or self.turn_arbiter.is_speaker_active()
 
             energy = self._compute_rms(chunk)
             _debug_audio_frames += 1
             if _debug_audio_frames % 200 == 0:
                 logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
 
-            # 1. Push audio to Gemini Live (with proximity filtering and speaker echo gating)
-            if not is_speaker_active:
-                num_faces = len(getattr(self, '_last_detected_faces', []))
-                is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
-                # Ignore background fan hum / low energy floor (< 120 RMS)
-                if energy >= 120.0 and self.proximity_filter.should_pass(chunk, is_overlap):
-                    if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
-                        self.realtime_voice.push_audio_chunk(chunk)
+            # 1. Push audio to Gemini Live (with proximity filtering and turn-taking arbitration)
+            num_faces = len(getattr(self, '_last_detected_faces', []))
+            is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
+
+            if hasattr(self, "turn_arbiter"):
+                should_stream = self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)
+            else:
+                should_stream = (not is_speaker_active) and (energy >= 120.0)
+
+            if should_stream and self.proximity_filter.should_pass(chunk, is_overlap):
+                if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
+                    self.realtime_voice.push_audio_chunk(chunk)
 
             # 2. Feed chunk through VAD pipeline (only when speaker is not echoing)
             from ..audio.vad import SpeechEvent
@@ -754,12 +770,12 @@ class LumiBrain:
                 with self._voice_buffer_lock:
                     self._voice_buffer.extend(chunk)
 
-            # 4. Eye animation on speech detection (only for real human speech, not robot self-echo)
+            # 4. Instant Local Acoustic Reflex (<150ms) on speech onset
             if not is_speaker_active:
                 if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy > ENERGY_THRESHOLD:
                     self._last_speech_time = time.time()
-                    if self.state.current_state == BehaviorState.IDLE:
-                        self.eyes.set_expression("curious")
+                    if event == SpeechEvent.SPEECH_START or energy > ENERGY_THRESHOLD:
+                        self.trigger_acoustic_reflex(energy=energy)
 
             # 5. Overlap detection (check periodically during speech)
             if not is_speaker_active and event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:
@@ -768,6 +784,60 @@ class LumiBrain:
                 self.vad.detect_overlap(num_faces)
             
             time.sleep(0.01)
+
+    def trigger_acoustic_reflex(self, energy: float = 0.0) -> bool:
+        """Instantaneous local acoustic reflex (<150ms) upon detecting human voice onset.
+        
+        Zero network/cloud dependency. Instantly perks eyes up with alert affect,
+        transitions to LISTENING state if IDLE, and initiates a subtle micro-nod
+        acknowledging the speaker before cloud response arrives.
+        """
+        if not self._acoustic_reflex_enabled:
+            return False
+        now = time.time()
+        if now - self._last_acoustic_reflex_time < self._acoustic_reflex_cooldown:
+            return False
+
+        if self._is_silent():
+            return False
+
+        # Software AEC: do not reflex on robot speaker self-echo
+        speaker_until = getattr(getattr(self, "realtime_voice", None), "_speaker_active_until", 0.0)
+        if time.time() < speaker_until or (hasattr(self, "speaker") and getattr(self.speaker, "is_playing", False)):
+            return False
+        if hasattr(self, "turn_arbiter") and self.turn_arbiter.is_speaker_active():
+            return False
+
+        self._last_acoustic_reflex_time = now
+
+        # 1. Perk eyes with alert/curious affect (Arousal +0.7, Valence +0.3)
+        if hasattr(self, "eyes") and self.eyes:
+            if hasattr(self.eyes, "set_affect"):
+                self.eyes.set_affect(valence=0.3, arousal=0.7)
+            elif hasattr(self.eyes, "set_expression"):
+                self.eyes.set_expression("curious")
+
+        # 2. Subtle organic micro-nod acknowledging speaker
+        if hasattr(self, "head") and self.head:
+            try:
+                self.head.tilt(2.0, duration_s=0.12)
+            except Exception as e:
+                logger.debug(f"Acoustic reflex head micro-nod note: {e}")
+
+        # 3. Transition to LISTENING if idle
+        if hasattr(self, "state") and self.state and self.state.current_state == BehaviorState.IDLE:
+            self.state.transition_to(BehaviorState.LISTENING, reason="acoustic_reflex_onset")
+
+        # 4. Telemetry logging
+        try:
+            from .telemetry import get_telemetry_logger
+            tel = get_telemetry_logger()
+            tel.record_event("TEL-01", {"source": "acoustic_reflex", "energy": energy, "timestamp": now})
+        except Exception:
+            pass
+
+        logger.debug(f"⚡ Instant Local Acoustic Reflex triggered (<150ms, energy={energy:.1f}).")
+        return True
 
     def _on_speech_utterance(self, audio_bytes: bytes, duration: float) -> None:
         """Called by VAD when a complete speech utterance is ready.
@@ -802,6 +872,15 @@ class LumiBrain:
                                     self.realtime_voice.inject_context(
                                         f"[CHILD SPOKE: '{text}'. LUMI REPLIED ENTHUSIASTICALLY: '{reply}']"
                                     )
+                                return
+                        else:
+                            # Closed-loop reinforcement: child made vocal sounds that STT could not transcribe
+                            reply = self.anjum_companion.handle_vocalization_detected(duration_s=duration)
+                            if reply:
+                                self.eyes.set_expression("excited")
+                                audio_path = self.tts.synthesize(reply)
+                                if audio_path:
+                                    self.speaker.play_file(audio_path, block=False)
                                 return
                     except Exception as e:
                         logger.debug(f"Anjum speech handling error: {e}")
@@ -990,15 +1069,15 @@ class LumiBrain:
             if self._had_tracked_face and not getattr(self.gestures, "is_playing", False):
                 time_since_lost = now - self._last_face_seen_time
 
-                # Phase 1: Target just walked out of camera view (0.5s - 2.5s ago)
-                # Move in the direction they were heading/exited!
-                if 0.5 <= time_since_lost < 2.5 and self._search_phase == 0:
+                # Phase 1: Target walked out of camera view (2.0s - 4.5s ago)
+                # Slower, intentional pan (1.2s) eliminates motion blur and head hunting
+                if 2.0 <= time_since_lost < 4.5 and self._search_phase == 0:
                     self._search_phase = 1
                     self._last_search_move_time = now
+                    from ..core.telemetry import get_telemetry
+                    get_telemetry().record_event("TEL-07", context="search_phase_1")
 
                     # Determine exit direction:
-                    # In camera coordinates: left side of image (x < center) is robot's left (+ pan)
-                    # right side of image (x > center) is robot's right (- pan)
                     if self._last_face_exit_side == "right" or self.head.current_pan < -10.0:
                         search_pan = -55.0  # Turn right (safe within -70°)
                         gaze_x = 0.8
@@ -1009,16 +1088,18 @@ class LumiBrain:
                         search_pan = -45.0  # Default right scan
                         gaze_x = 0.6
 
-                    logger.info(f"👀 Face moved out of frame ({self._last_face_exit_side}). Panning to {search_pan:.1f}° to reacquire target...")
+                    logger.info(f"👀 Face moved out of frame ({self._last_face_exit_side}). Smoothly panning to {search_pan:.1f}° to reacquire target...")
                     self.eyes.set_expression("curious")
                     self.eyes.set_gaze(gaze_x, 0.0)
-                    self.head.pan(search_pan, duration_s=0.35)
+                    self.head.pan(search_pan, duration_s=1.2)
 
-                # Phase 2: Still not found after ~2.5s - 5.5s
-                # Pan to the opposite direction to see if someone is over there!
-                elif 2.5 <= time_since_lost < 5.5 and self._search_phase == 1 and (now - self._last_search_move_time >= 1.5):
+                # Phase 2: Still not found after ~4.5s - 8.0s
+                # Pan to opposite direction smoothly (1.2s)
+                elif 4.5 <= time_since_lost < 8.0 and self._search_phase == 1 and (now - self._last_search_move_time >= 2.0):
                     self._search_phase = 2
                     self._last_search_move_time = now
+                    from ..core.telemetry import get_telemetry
+                    get_telemetry().record_event("TEL-07", context="search_phase_2")
 
                     # Opposite direction
                     if self.head.current_pan < 0:
@@ -1031,17 +1112,19 @@ class LumiBrain:
                     logger.info(f"🔍 Face not found in exit direction. Scanning opposite side ({opposite_pan:.1f}°)...")
                     self.eyes.set_expression("thinking")
                     self.eyes.set_gaze(gaze_x, 0.0)
-                    self.head.pan(opposite_pan, duration_s=0.45)
+                    self.head.pan(opposite_pan, duration_s=1.2)
 
-                # Phase 3: Still no one after 5.5s
+                # Phase 3: Still no one after 8.0s
                 # Return smoothly to center/home and rest
-                elif time_since_lost >= 5.5 and self._search_phase == 2 and (now - self._last_search_move_time >= 1.8):
+                elif time_since_lost >= 8.0 and self._search_phase == 2 and (now - self._last_search_move_time >= 2.5):
                     self._search_phase = 3
                     self._had_tracked_face = False
+                    from ..core.telemetry import get_telemetry
+                    get_telemetry().record_event("TEL-07", context="search_phase_3_home")
                     logger.info("🏠 Search complete. No face detected. Returning head and gaze to center.")
                     self.eyes.set_expression("neutral")
                     self.eyes.set_gaze(0.0, 0.0)
-                    self.head.look_center(duration_s=0.35)
+                    self.head.look_center(duration_s=1.0)
             return
 
         self._last_detected_faces = faces
@@ -1094,22 +1177,45 @@ class LumiBrain:
 
         # Check for Anjum (Speech-Therapy & Companion Mode)
         name_lower = face.person.name.lower().strip() if (face.is_known and face.person) else ""
-        if "anjum" in name_lower or "আঞ্জুম" in name_lower:
+        is_anjum = "anjum" in name_lower or "আঞ্জুম" in name_lower
+
+        if is_anjum:
+            self._anjum_consecutive_frames += 1
             now_t = time.time()
             self._last_anjum_seen_time = now_t
             self._last_face_seen_time = now_t
             self.anjum_companion.mark_seen(now_t)
             self.active_person = face.person
-            if self.state.current_state != BehaviorState.ANJUM_MODE:
+            # Require 3 consecutive confirmed frames before entering ANJUM_MODE to prevent false triggers
+            if self.state.current_state != BehaviorState.ANJUM_MODE and self._anjum_consecutive_frames >= 3:
                 self._enter_anjum_mode()
             return
-        elif self.state.current_state == BehaviorState.ANJUM_MODE:
-            # While in Anjum mode, any face visible maintains her presence timer
-            now_t = time.time()
-            self._last_anjum_seen_time = now_t
-            self._last_face_seen_time = now_t
-            self.anjum_companion.mark_seen(now_t)
-            return
+        else:
+            self._anjum_consecutive_frames = 0
+
+        # While in Anjum mode:
+        if self.state.current_state == BehaviorState.ANJUM_MODE:
+            # If a known adult is detected, immediately exit Anjum mode
+            if face.is_known and face.person is not None:
+                p_age = getattr(face.person, "age", None)
+                if p_age is None or p_age > 12:
+                    logger.info(f"Adult '{face.person.name}' detected in Anjum mode. Exiting Anjum Mode.")
+                    self._exit_anjum_mode()
+                    # Fall through to standard adult greeting/interaction below
+                else:
+                    # Known child face maintains presence
+                    now_t = time.time()
+                    self._last_anjum_seen_time = now_t
+                    self._last_face_seen_time = now_t
+                    self.anjum_companion.mark_seen(now_t)
+                    return
+            else:
+                # Unknown face in Anjum mode maintains presence
+                now_t = time.time()
+                self._last_anjum_seen_time = now_t
+                self._last_face_seen_time = now_t
+                self.anjum_companion.mark_seen(now_t)
+                return
 
         if face.is_known and face.person is not None:
             person = face.person
@@ -1618,6 +1724,8 @@ class LumiBrain:
 
     def _is_silent(self) -> bool:
         """Return True if LUMI is in a user-commanded silent period."""
+        if hasattr(self, "turn_arbiter"):
+            return self.turn_arbiter.is_silent()
         return time.time() < self._silent_until
 
     def _tool_set_silent_mode(self, duration_seconds: Optional[float] = None, silent_until_iso: Optional[str] = None) -> str:
@@ -1637,6 +1745,9 @@ class LumiBrain:
         else:
             # Default: 5 minutes
             self._silent_until = now + 300.0
+
+        if hasattr(self, "turn_arbiter"):
+            self.turn_arbiter.set_silent_until(self._silent_until)
 
         # Immediately stop speech output and silence audio hardware
         if hasattr(self, "speaker") and self.speaker:
@@ -2195,6 +2306,10 @@ class LumiBrain:
         self.eyes.set_expression("excited")
         greeting = self.anjum_companion.activate()
 
+        # Reset conversational turn state to avoid persona bleed
+        if hasattr(self.realtime_voice, "reset_dialogue_state"):
+            self.realtime_voice.reset_dialogue_state()
+
         # Inject specialized child therapy prompt into Gemini Live
         if hasattr(self.realtime_voice, "inject_context"):
             from ..ai.prompts import ANJUM_SYSTEM_PROMPT_BN
@@ -2210,9 +2325,14 @@ class LumiBrain:
     def _exit_anjum_mode(self) -> None:
         """Exits Anjum mode after 10-second timeout and returns to IDLE."""
         logger.info("👧 Exiting ANJUM_MODE (timeout / left view).")
+        self._anjum_consecutive_frames = 0
         goodbye = self.anjum_companion.deactivate()
         self.state.transition_to(BehaviorState.IDLE, reason="anjum_left")
         self.eyes.set_expression("neutral")
+
+        # Reset dialogue state to purge child persona
+        if hasattr(self.realtime_voice, "reset_dialogue_state"):
+            self.realtime_voice.reset_dialogue_state()
 
         audio_path = self.tts.synthesize(goodbye)
         if audio_path:
@@ -2222,5 +2342,25 @@ class LumiBrain:
             self.realtime_voice.inject_context(
                 "[SYSTEM DIRECTIVE: Anjum has left the camera view. Exited ANJUM MODE. Returning to normal adult conversation mode.]"
             )
+
+    def shutdown(self) -> None:
+        """Clean shutdown of all background brain threads and daemons."""
+        self._running = False
+        if hasattr(self, "memory_consolidator") and self.memory_consolidator:
+            try:
+                self.memory_consolidator.stop()
+            except Exception:
+                pass
+        if hasattr(self, "servo") and self.servo:
+            try:
+                self.servo.shutdown()
+            except Exception:
+                pass
+        if hasattr(self, "eyes") and self.eyes:
+            try:
+                self.eyes.stop()
+            except Exception:
+                pass
+        logger.info("LumiBrain shut down cleanly.")
 
 
