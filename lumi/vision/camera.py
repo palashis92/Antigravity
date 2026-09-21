@@ -195,28 +195,46 @@ class PiCameraBackend(CameraBackendBase):
 
 
 class CameraInterface:
-    """Unified camera abstraction manager for LUMI."""
+    """Unified camera abstraction manager for LUMI with intelligent multi-thread micro-caching."""
 
     def __init__(self, backend: Optional[CameraBackendBase] = None) -> None:
         self.backend: CameraBackendBase = backend or MockCameraBackend()
+        self._cached_frame: Optional[Any] = None
+        self._last_capture_time: float = 0.0
+        import threading
+        self._cache_lock = threading.Lock()
 
     def set_backend(self, backend: CameraBackendBase) -> None:
         if self.backend.is_available():
             self.backend.stop()
         self.backend = backend
+        with self._cache_lock:
+            self._cached_frame = None
+            self._last_capture_time = 0.0
 
     def start(self) -> bool:
         return self.backend.start()
 
     def stop(self) -> None:
+        with self._cache_lock:
+            self._cached_frame = None
         self.backend.stop()
 
     def is_available(self) -> bool:
         return self.backend.is_available()
 
-    def get_frame(self) -> Optional[Any]:
-        return self.backend.get_frame()
+    def get_frame(self, fresh: bool = False, max_age_s: float = 0.08) -> Optional[Any]:
+        """Fetch frame with intelligent micro-caching to eliminate multi-thread V4L2 contention."""
+        now = time.time()
+        with self._cache_lock:
+            if not fresh and self._cached_frame is not None and (now - self._last_capture_time) < max_age_s:
+                return self._cached_frame
+            frame = self.backend.get_frame()
+            if frame is not None:
+                self._cached_frame = frame
+                self._last_capture_time = now
+            return self._cached_frame
 
     def capture_frame(self) -> Optional[Any]:
         """Convenience alias for get_frame()."""
-        return self.backend.get_frame()
+        return self.get_frame()

@@ -720,6 +720,118 @@ def test_universal_continuous_face_learning_and_conversational_intro() -> None:
     assert updated_tanveer.face_embeddings[0] == face_sample1
 
 
+def test_setup_prompt_injects_owner_facts() -> None:
+    """Verify that _send_setup includes both owner identity and their key semantic facts."""
+    from unittest.mock import AsyncMock, MagicMock
+    import json
+    from lumi.ai.gemini_live import GeminiLiveClient
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mizan = mem.remember_person("Mizan", relationship="owner", notes="Owner of LUMI.")
+    mem.remember_fact("পেশা: সফটওয়্যার ইঞ্জিনিয়ার", person_id=mizan.id)
+    mem.remember_fact("প্রিয় খাবার: বিরিয়ানি", person_id=mizan.id)
+
+    client = GeminiLiveClient(
+        mic=MagicMock(),
+        speaker=MagicMock(),
+        eyes=MagicMock(),
+        gestures=MagicMock(),
+        state=MagicMock(),
+        memory=mem,
+        event_bus=MagicMock(),
+    )
+
+    mock_ws = AsyncMock()
+    import asyncio
+    asyncio.run(client._send_setup(mock_ws))
+
+    assert mock_ws.send.called
+    sent_payload = json.loads(mock_ws.send.call_args[0][0])
+    sys_instruction = sent_payload["setup"]["systemInstruction"]["parts"][0]["text"]
+
+    assert "Mizan" in sys_instruction
+    assert "KEY FACTS & MEMORIES ABOUT MIZAN" in sys_instruction
+    assert "সফটওয়্যার ইঞ্জিনিয়ার" in sys_instruction
+    assert "বিরিয়ানি" in sys_instruction
+
+
+def test_camera_interface_micro_caching() -> None:
+    """Verify CameraInterface caches frames within 80ms window to prevent multi-thread hardware contention."""
+    from unittest.mock import MagicMock
+    import time
+    from lumi.vision.camera import CameraInterface
+
+    mock_backend = MagicMock()
+    mock_backend.get_frame.side_effect = [
+        {"frame": 1},
+        {"frame": 2},
+    ]
+
+    cam = CameraInterface(mock_backend)
+    
+    # First call captures from backend
+    f1 = cam.get_frame()
+    assert f1 == {"frame": 1}
+    assert mock_backend.get_frame.call_count == 1
+
+    # Immediate second call within 80ms returns cached frame without re-calling backend
+    f2 = cam.get_frame()
+    assert f2 == {"frame": 1}
+    assert mock_backend.get_frame.call_count == 1
+
+    # After 90ms, it fetches fresh frame
+    time.sleep(0.09)
+    f3 = cam.get_frame()
+    assert f3 == {"frame": 2}
+    assert mock_backend.get_frame.call_count == 2
+
+
+def test_mem0_deterministic_bengali_fact_extraction() -> None:
+    """Verify deterministic extraction of Bengali facts without external network dependencies."""
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+    from lumi.memory.mem0_engine import LumiMem0Engine
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    person = mem.remember_person("Mizan", relationship="owner")
+
+    engine = LumiMem0Engine(mem)
+
+    # 1. Profession test
+    engine.process_conversation_turn_async(
+        person_id=person.id,
+        person_name=person.name,
+        user_text="আমি সফটওয়্যার ইঞ্জিনিয়ার হিসেবে কাজ করি।",
+        ai_text="দারুণ পেশা!"
+    )
+    facts = mem.recall_facts(person_id=person.id)
+    assert any("সফটওয়্যার ইঞ্জিনিয়ার" in f.fact_text for f in facts)
+
+    # 2. Preference test
+    engine.process_conversation_turn_async(
+        person_id=person.id,
+        person_name=person.name,
+        user_text="আমার প্রিয় খাবার কাচ্চি বিরিয়ানি।",
+        ai_text="কাচ্চি বিরিয়ানি তো খুবই সুস্বাদু!"
+    )
+    facts = mem.recall_facts(person_id=person.id)
+    assert any("কাচ্চি বিরিয়ানি" in f.fact_text for f in facts)
+
+    # 3. Location test
+    engine.process_conversation_turn_async(
+        person_id=person.id,
+        person_name=person.name,
+        user_text="আমি সিলেটে থাকি।",
+        ai_text="সিলেট খুব সুন্দর জায়গা!"
+    )
+    facts = mem.recall_facts(person_id=person.id)
+    assert any("সিলেট" in f.fact_text for f in facts)
+
+
 if __name__ == "__main__":
     test_servo_auto_relax_lifecycle()
     print("✓ test_servo_auto_relax_lifecycle PASSED")

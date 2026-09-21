@@ -727,35 +727,42 @@ class LumiBrain:
                 time.sleep(0.01)
                 continue
 
-            # 1. Push audio to Gemini Live (with proximity filtering)
-            num_faces = len(getattr(self, '_last_detected_faces', []))
-            is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
-            if self.proximity_filter.should_pass(chunk, is_overlap):
-                if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
-                    self.realtime_voice.push_audio_chunk(chunk)
+            # Software AEC Gating: check if robot speaker is currently active
+            speaker_until = getattr(getattr(self, "realtime_voice", None), "_speaker_active_until", 0.0)
+            is_speaker_active = (time.time() < speaker_until) or (hasattr(self, "speaker") and getattr(self.speaker, "is_playing", False))
 
-            # 2. Feed chunk through VAD pipeline
-            from ..audio.vad import SpeechEvent
-            event = self.vad.process_chunk(chunk)
-
-            # 3. Collect audio for voice enrollment if active
-            if self._enrolling_voice_for:
-                with self._voice_buffer_lock:
-                    self._voice_buffer.extend(chunk)
-
-            # 4. Eye animation on speech detection (DOA sound orientation disabled)
             energy = self._compute_rms(chunk)
             _debug_audio_frames += 1
             if _debug_audio_frames % 200 == 0:
                 logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
 
-            if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy > ENERGY_THRESHOLD:
-                self._last_speech_time = time.time()
-                if self.state.current_state == BehaviorState.IDLE:
-                    self.eyes.set_expression("curious")
+            # 1. Push audio to Gemini Live (with proximity filtering and speaker echo gating)
+            if not is_speaker_active:
+                num_faces = len(getattr(self, '_last_detected_faces', []))
+                is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
+                # Ignore background fan hum / low energy floor (< 120 RMS)
+                if energy >= 120.0 and self.proximity_filter.should_pass(chunk, is_overlap):
+                    if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "push_audio_chunk"):
+                        self.realtime_voice.push_audio_chunk(chunk)
+
+            # 2. Feed chunk through VAD pipeline (only when speaker is not echoing)
+            from ..audio.vad import SpeechEvent
+            event = self.vad.process_chunk(chunk) if not is_speaker_active else None
+
+            # 3. Collect audio for voice enrollment if active
+            if self._enrolling_voice_for and not is_speaker_active:
+                with self._voice_buffer_lock:
+                    self._voice_buffer.extend(chunk)
+
+            # 4. Eye animation on speech detection (only for real human speech, not robot self-echo)
+            if not is_speaker_active:
+                if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy > ENERGY_THRESHOLD:
+                    self._last_speech_time = time.time()
+                    if self.state.current_state == BehaviorState.IDLE:
+                        self.eyes.set_expression("curious")
 
             # 5. Overlap detection (check periodically during speech)
-            if event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:
+            if not is_speaker_active and event == SpeechEvent.SPEECH_CONTINUE and _debug_audio_frames % 50 == 0:
                 # Count visible faces from last perception loop
                 num_faces = len(getattr(self, '_last_detected_faces', []))
                 self.vad.detect_overlap(num_faces)

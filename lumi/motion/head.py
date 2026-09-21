@@ -114,7 +114,8 @@ class HeadController:
         target_tilt = max(self.SAFE_MIN_TILT, min(self.SAFE_MAX_TILT, self.current_tilt + delta_tilt))
 
         if abs(delta_pan) > 0.4 or abs(delta_tilt) > 0.4:
-            self.look_at(target_pan, target_tilt, duration_s=0.12)
+            track_duration = 0.04 if (abs(delta_pan) < 8.0 and abs(delta_tilt) < 5.0) else 0.08
+            self.look_at(target_pan, target_tilt, duration_s=track_duration)
         return target_pan, target_tilt
 
     def subtle_idle_wander(self) -> None:

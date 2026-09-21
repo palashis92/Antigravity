@@ -50,11 +50,74 @@ class LumiMem0Engine:
             self.client = _genai.Client(api_key=self.api_key)
         self._lock = threading.Lock()
 
+    def _extract_deterministic_facts(self, person_id: str, person_name: str, text: str) -> None:
+        """Deterministic extraction for common Bengali self-declarations (Layer 3)."""
+        if not text or not person_id:
+            return
+        t = text.strip()
+        # 1. Profession / Job
+        m = re.search(r"(?:আমি|আমার পেশা)\s+(?:একজন\s+)?([^\.,\n!]+?)(?: হিসেবে কাজ করি|\s*করি| জব করি| চাকরি করি)", t)
+        if m:
+            job = m.group(1).strip()
+            if 2 <= len(job) <= 40:
+                self.memory.remember_fact(f"পেশা / কাজ: {job}", person_id=person_id, category="profession")
+
+        # 2. Favorites / Preferences
+        m = re.search(r"আমার প্রিয়\s+([^\.,\n!]+?)\s+(?:হলো|হচ্ছে|হল)?\s*([^\.,\n!]+)", t)
+        if m:
+            item = m.group(1).strip()
+            val = m.group(2).strip()
+            if len(item) >= 2 and len(val) >= 2:
+                self.memory.remember_fact(f"প্রিয় {item}: {val}", person_id=person_id, category="preference")
+
+        # 3. Location / Residence
+        m = re.search(r"(?:আমার বাড়ি|আমি)\s+([^\.,\n!]+?)(?:ে|এ|তে|য়)?\s+(?:থাকি|বাস করি)", t)
+        if m:
+            loc = m.group(1).strip()
+            if 2 <= len(loc) <= 30:
+                self.memory.remember_fact(f"বাসস্থান / অবস্থান: {loc}", person_id=person_id, category="location")
+
+    def _call_gemini_rest(self, prompt: str) -> str:
+        """Call Gemini REST API directly using stdlib urllib (zero external dependencies)."""
+        if not self.api_key:
+            return "[]"
+        import urllib.request
+        model = os.getenv("GEMINI_FLASH_MODEL", "gemini-2.0-flash")
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={self.api_key}"
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseMimeType": "application/json"
+            }
+        }
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12.0) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                candidates = res_data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    if parts:
+                        return parts[0].get("text", "[]")
+        except Exception as e:
+            logger.debug(f"Gemini REST memory extraction error: {e}")
+        return "[]"
+
     def process_conversation_turn_async(
         self, person_id: str, person_name: str, user_text: str, ai_text: str
     ) -> None:
-        """Fires an asynchronous background thread to extract memory."""
-        if not self.client:
+        """Fires deterministic extraction first, then an asynchronous background LLM thread."""
+        # 1. Always run deterministic extraction immediately (0 network calls, 0 latency)
+        self._extract_deterministic_facts(person_id, person_name, user_text)
+
+        # 2. If API key or client is available, run deep LLM extraction in background
+        if not self.api_key and not self.client:
             return
 
         thread = threading.Thread(
@@ -130,13 +193,17 @@ class LumiMem0Engine:
                 )
 
                 # 3. Call LLM for extraction
-                response = self.client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=_types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                    ),
-                )
+                if self.client and _types:
+                    response = self.client.models.generate_content(
+                        model=os.getenv("GEMINI_FLASH_MODEL", "gemini-2.0-flash"),
+                        contents=prompt,
+                        config=_types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                        ),
+                    )
+                    raw_json = response.text.strip() if (response and response.text) else "[]"
+                else:
+                    raw_json = self._call_gemini_rest(prompt)
 
                 # 4. Apply Database Actions
                 raw_json = response.text.strip() if (response and response.text) else "[]"

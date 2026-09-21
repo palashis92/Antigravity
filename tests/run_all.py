@@ -127,6 +127,9 @@ def main():
         ("test_bilingual_owner_matching_and_memorize_person", timp.test_bilingual_owner_matching_and_memorize_person, ()),
         ("test_owner_auto_enroll_and_persistent_identity", timp.test_owner_auto_enroll_and_persistent_identity, ()),
         ("test_universal_continuous_face_learning_and_conversational_intro", timp.test_universal_continuous_face_learning_and_conversational_intro, ()),
+        ("test_setup_prompt_injects_owner_facts", timp.test_setup_prompt_injects_owner_facts, ()),
+        ("test_camera_interface_micro_caching", timp.test_camera_interface_micro_caching, ()),
+        ("test_mem0_deterministic_bengali_fact_extraction", timp.test_mem0_deterministic_bengali_fact_extraction, ()),
     ]
 
     for name, fn, args in tests_to_run:

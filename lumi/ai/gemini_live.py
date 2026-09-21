@@ -131,6 +131,28 @@ class GeminiLiveClient:
             return True
         return False
 
+    def _check_eager_recall(self, text: str) -> None:
+        """Eagerly inject relevant memories during speech transcription before Gemini finishes."""
+        import re
+        lower = text.lower()
+        # Trigger on identity queries / memory questions
+        if re.search(r"(?:আমাকে চেন|চিনতে পার|আমার সম্পর্কে|আমার সম্বন্ধে|আমি কে|আমার নাম|মনে আছে|মনে পড়ে|remember|who am i|do you know me|about me)", lower):
+            try:
+                owner_person = None
+                if self.memory and hasattr(self.memory, "list_people"):
+                    for p in self.memory.list_people():
+                        if p.relationship and p.relationship.lower() == "owner":
+                            owner_person = p
+                            break
+                if owner_person and hasattr(self.memory, "recall_facts"):
+                    facts = self.memory.recall_facts(person_id=owner_person.id)
+                    if facts:
+                        fact_str = ", ".join([f.fact_text for f in facts[:4]])
+                        context = f"[ACTIVE RECALL: You are speaking with {owner_person.name} ({owner_person.relationship}). Key facts you know about them: {fact_str}. Answer their question with these memories naturally in your characteristic witty personality.]"
+                        self.inject_context(context, trigger_response=False)
+            except Exception as e:
+                logger.debug(f"Eager recall check error: {e}")
+
     def start(self) -> None:
         if self._running: return
         if not self.api_key:
@@ -242,11 +264,13 @@ class GeminiLiveClient:
 
         # Inject owner & primary user context so Gemini never asks who it is talking to
         owner_name = "Mizan"
+        owner_person = None
         try:
             if self.memory and hasattr(self.memory, "list_people"):
                 for p in self.memory.list_people():
                     if p.relationship and p.relationship.lower() == "owner":
                         owner_name = p.name
+                        owner_person = p
                         break
         except Exception:
             pass
@@ -254,6 +278,19 @@ class GeminiLiveClient:
             f"\n\n[COMPANION CONTEXT]:\n"
             f"You are currently with {owner_name} (your owner). Treat them as your close friend and companion."
         )
+
+        # Inject owner's semantic memories so Gemini knows them from the very first turn
+        try:
+            if owner_person and hasattr(self.memory, "recall_facts"):
+                facts = self.memory.recall_facts(person_id=owner_person.id)
+                if facts:
+                    fact_texts = [f"- {f.fact_text}" for f in facts[:8]]
+                    instructions += (
+                        f"\n\n[KEY FACTS & MEMORIES ABOUT {owner_name.upper()}]:\n"
+                        + "\n".join(fact_texts)
+                    )
+        except Exception as e:
+            logger.debug(f"Could not append owner facts to setup prompt: {e}")
 
         # Inject recent conversation turns so LUMI never forgets context across turns/reconnects
         try:
@@ -494,6 +531,11 @@ class GeminiLiveClient:
                         # Log if we get transcriptions natively (raw API format)
                         if "interrupted" in data["serverContent"]:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
+                            if hasattr(self, "speaker") and self.speaker:
+                                try:
+                                    self.speaker.stop_stream()
+                                except Exception as e:
+                                    logger.debug(f"Interruption mute error: {e}")
                             if self.gestures and hasattr(self.gestures, "idle_pose"):
                                 self.gestures.play_async(self.gestures.idle_pose, name="interrupted_reset")
                             
@@ -511,6 +553,7 @@ class GeminiLiveClient:
                             if txt:
                                 user_buffer.append(txt)
                                 self._check_silence_command(txt)
+                                self._check_eager_recall(txt)
                         if "outputAudioTranscription" in content:
                             txt = _get_text(content['outputAudioTranscription'])
                             print(f"🤖 [LUMI (Draft)]: {txt}")
@@ -522,6 +565,7 @@ class GeminiLiveClient:
                             if txt:
                                 user_buffer.append(txt)
                                 self._check_silence_command(txt)
+                                self._check_eager_recall(txt)
                         if "outputTranscription" in content:
                             txt = _get_text(content['outputTranscription'])
                             print(f"🤖 [LUMI (Draft)]: {txt}")
