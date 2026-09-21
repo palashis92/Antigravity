@@ -313,8 +313,8 @@ class LumiBrain:
             logger.info("No MEM0_API_KEY found. Falling back to native LumiMem0 Engine.")
             self.mem0 = LumiMem0Engine(self.memory)
 
-        # Active interaction context
-        self.active_person: Optional[Any] = None
+        # Active interaction context (default to designated owner Mizan)
+        self.active_person: Optional[Any] = self.get_owner()
         self._running = False
         self._perception_thread: Optional[threading.Thread] = None
         self._audio_thread: Optional[threading.Thread] = None
@@ -358,24 +358,30 @@ class LumiBrain:
 
     def get_owner(self) -> Any:
         """Find the designated owner of LUMI (by relationship='owner' or configured owner_name)."""
+        if not getattr(self, "memory", None):
+            return None
         try:
             for p in self.memory.list_people():
                 if p.relationship and p.relationship.lower() == "owner":
                     return p
         except Exception:
             pass
-        owner_name = getattr(getattr(getattr(self, "settings", None), "app", None), "owner_name", "Mizan")
-        owner = self.memory.find_person_by_name(owner_name)
-        if owner:
-            return owner
-        people = self.memory.list_people()
-        return people[0] if people else None
+        try:
+            owner_name = getattr(getattr(getattr(self, "settings", None), "app", None), "owner_name", "Mizan")
+            owner = self.memory.find_person_by_name(owner_name)
+            if owner:
+                return owner
+            people = self.memory.list_people()
+            return people[0] if people else None
+        except Exception:
+            return None
 
     def _on_turn_complete(self, event: Event) -> None:
         person = self.active_person
         if not person:
             # Default to owner (Mizan), or the primary registered person
             person = self.get_owner()
+            self.active_person = person
 
         u_text = event.data.get("user", "")
         l_text = event.data.get("lumi", "")
@@ -516,15 +522,12 @@ class LumiBrain:
                 if frame is not None:
                     self.process_person_interaction(frame)
 
-            # Clear active_person if no face detected for 30 seconds
+            # Fall back to designated owner if active person timed out (no face for 30s)
             if self.active_person and (now - self._last_face_seen_time > 30.0):
-                logger.info(f"Active person '{self.active_person.name}' timed out (no face for 30s).")
-                self.active_person = None
-                self._unknown_greeting_asked = False
-
-            # Reset unknown greeting asked flag if no face has been seen for > 60s
-            if (now - getattr(self, "_last_face_seen_time", 0.0)) > 60.0:
-                self._unknown_greeting_asked = False
+                owner = self.get_owner()
+                if owner and getattr(self.active_person, "id", None) != owner.id:
+                    logger.info(f"Active person '{self.active_person.name}' timed out. Resetting to owner '{owner.name}'.")
+                    self.active_person = owner
 
             # Anjum Mode: 10s absence timeout & proactive stimulation
             if self.state.current_state == BehaviorState.ANJUM_MODE:
@@ -1075,20 +1078,34 @@ class LumiBrain:
                 self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
         else:
             # Unrecognized face in current frame
-            # 1. If an active person is already established (e.g. owner Mizan or an introduced friend),
-            # maintain sticky attribution across transient frame misses / lighting shifts.
-            # NEVER clear active_person to None on single frame glitches, and NEVER treat them as a stranger!
+            owner = self.get_owner()
+
+            # 1. Auto-enroll face for owner if owner has no face embedding yet
+            if owner and not getattr(owner, "face_embeddings", None) and face.embedding:
+                owner.add_face_embedding(face.embedding)
+                self.memory.update_person(owner)
+                self.active_person = owner
+                logger.info(f"[IDENTITY] Auto-enrolled primary face embedding for owner '{owner.name}'.")
+                return
+
+            # 2. Maintain sticky active_person across transient frame misses / lighting shifts
             if self.active_person is not None:
                 logger.debug(f"[IDENTITY] Maintaining active_person '{self.active_person.name}' across frame variation.")
                 return
 
-            # 2. If identity is LOW_CONFIDENCE, wait for multi-frame voting to stabilize
+            # 3. Default to owner Mizan in their own space
+            if owner:
+                self.active_person = owner
+                logger.debug(f"[IDENTITY] Defaulted active_person to owner '{owner.name}'.")
+                return
+
+            # 4. If identity is LOW_CONFIDENCE, wait for multi-frame voting to stabilize
             from ..vision.face import IdentityState
             if getattr(face, "identity_state", None) == IdentityState.LOW_CONFIDENCE:
                 logger.debug("[IDENTITY] Face in LOW_CONFIDENCE state — awaiting temporal stabilization.")
                 return
 
-            # 3. Store pending unknown face for potential enrollment
+            # 5. Store pending unknown face for potential enrollment
             if hasattr(self.face_service, "set_pending_face"):
                 self.face_service.set_pending_face(face.embedding)
             
@@ -1096,24 +1113,24 @@ class LumiBrain:
             unknown_vision_conf = getattr(getattr(self, "settings", None), "vision", None)
             unknown_cooldown = getattr(unknown_vision_conf, "unknown_greeting_cooldown_s", 7200.0) if unknown_vision_conf else 7200.0
 
-            # 4. Check silent mode
+            # 6. Check silent mode
             if self._is_silent():
                 logger.info("Silent mode active: suppressing unknown-person greeting.")
                 return
 
-            # 5. Check ongoing conversation activity (< 120s)
+            # 7. Check ongoing conversation activity (< 120s)
             voice_last_active = getattr(getattr(self, "realtime_voice", None), "_last_active_time", 0.0)
             recent_speech_t = max(getattr(self, "_last_speech_time", 0.0), voice_last_active)
             if (now_t - recent_speech_t) < 120.0:
                 logger.debug("[IDENTITY] Active conversation in progress — suppressing stranger greeting.")
                 return
 
-            # 6. Check if already asked in this session/encounter
+            # 8. Check if already asked in this session/encounter
             if getattr(self, "_unknown_greeting_asked", False):
                 logger.debug("[IDENTITY] Unknown person already greeted in this session — suppressing repetitive prompt.")
                 return
 
-            # 7. Check cooldown (2 hours / 7200s)
+            # 9. Check cooldown (2 hours / 7200s)
             if (now_t - getattr(self, "_last_unknown_greeting_time", 0.0)) < unknown_cooldown:
                 return
 
@@ -1125,28 +1142,18 @@ class LumiBrain:
             import random
             unknown_prompts = [
                 (
-                    "[VISUAL EVENT: An unfamiliar person has just appeared in front of your camera right now!]\n"
-                    "INSTRUCTION: Greet them immediately, warmly, and with friendly curiosity in Bengali (বাংলা).\n"
-                    "- First introduce yourself as LUMI ('আমি লুমি').\n"
-                    "- Ask for their name with friendly interest ('তোমাকে তো আগে দেখিনি! তোমার নাম কী?' বা 'পরিচয়টা দাও তো!').\n"
-                    "- CRITICAL RULE: Do NOT ask if they have a message for the owner right now, and do NOT say 'তিনি নেই' on first contact. First introduce yourself, make friends, and ask their name! Only mention the owner later in conversation if they ask for them.\n"
-                    "- When they tell you their name, you can remember them with the 'memorize_person' tool.\n"
-                    "- Do NOT repeat the exact same sentence if you just said it. Keep it natural and fresh!"
+                    "[VISUAL EVENT: A person has appeared in front of your camera.]\n"
+                    "INSTRUCTION: Greet them casually and with witty personality in Bengali (বাংলা).\n"
+                    "- Be charming, sharp, and confident like Grok.\n"
+                    "- Do NOT ask 'তোমার নাম কী?' or 'তোমাকে তো আগে দেখিনি!' repeatedly.\n"
+                    "- Just engage them naturally in 1-2 punchy sentences!"
                 ),
                 (
-                    "[VISUAL EVENT: A new visitor is standing in front of you!]\n"
-                    "INSTRUCTION: Greet them with cheerful surprise in Bengali (বাংলা).\n"
-                    "- Say something lively like: 'আরে, নতুন একজন বন্ধু এসেছে! আমি লুমি, তোমার নাম কী বলো তো?'\n"
-                    "- Focus completely on introducing yourself and getting to know them.\n"
-                    "- Do NOT ask if they have a message for the owner on first meeting.\n"
-                    "- Be friendly, sweet, and invite them to chat!"
-                ),
-                (
-                    "[VISUAL EVENT: You see a new face in front of your camera!]\n"
-                    "INSTRUCTION: Greet them warmly and politely in conversational Bengali (বাংলা).\n"
-                    "- Say: 'হ্যালো! তোমাকে তো আগে দেখিনি। আমি লুমি! তোমার পরিচয়টা কী জানতে পারি?'\n"
-                    "- Let the conversation flow naturally. Do NOT mention the owner right away.\n"
-                    "- Keep your response short, sweet, and human-like."
+                    "[VISUAL EVENT: Someone is standing in front of you.]\n"
+                    "INSTRUCTION: Greet them with a bold, lively, and warm remark in conversational Bengali (বাংলা).\n"
+                    "- Talk naturally as LUMI.\n"
+                    "- Do NOT mechanically interrogate their name or identity.\n"
+                    "- Keep it punchy and human-like."
                 ),
             ]
             prompt = random.choice(unknown_prompts)
@@ -1156,9 +1163,9 @@ class LumiBrain:
                 self.realtime_voice.inject_context(prompt, trigger_response=True)
             elif hasattr(self, "tts") and hasattr(self, "speaker"):
                 local_greetings = [
-                    "হ্যালো! আমি লুমি। তোমাকে তো আগে দেখিনি, তোমার নাম কী?",
-                    "আরে, নতুন বন্ধু! আমি লুমি। তোমার পরিচয়টা দাও তো!",
-                    "ওহ, হ্যালো! আমি লুমি। তোমার নাম কী বলো তো?"
+                    "হ্যালো! কেমন আছেন? দিনকাল কেমন যাচ্ছে?",
+                    "এই যে! কি খবর? সব ঠিকঠাক?",
+                    "হ্যালো! আপনাকে দেখে ভালো লাগলো, কেমন আছেন?"
                 ]
                 greeting_text = random.choice(local_greetings)
                 audio_path = self.tts.synthesize(greeting_text)

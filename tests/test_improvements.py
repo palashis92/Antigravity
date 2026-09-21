@@ -575,6 +575,75 @@ def test_bilingual_owner_matching_and_memorize_person() -> None:
     assert brain._unknown_greeting_asked is False
 
 
+def test_owner_auto_enroll_and_persistent_identity() -> None:
+    """Verify that an unrecognized face when owner has no face embedding auto-enrolls and suppresses stranger greeting."""
+    from unittest.mock import MagicMock
+    from lumi.core.lumi_brain import LumiBrain
+    from lumi.core.state_manager import StateManager, BehaviorState
+    from lumi.memory.database import Database
+    from lumi.memory.manager import MemoryManager
+    from lumi.vision.face import DetectedFace, IdentityState
+
+    db = Database(db_path=":memory:", enable_wal=False)
+    mem = MemoryManager(db)
+    mizan = mem.remember_person("Mizan", relationship="owner")
+    assert len(mizan.face_embeddings) == 0
+
+    brain = LumiBrain.__new__(LumiBrain)
+    brain.memory = mem
+    brain.state = StateManager()
+    brain.settings = MagicMock()
+    brain.settings.vision.frame_width = 640
+    brain.settings.vision.frame_height = 480
+    brain.settings.vision.unknown_greeting_cooldown_s = 7200.0
+    brain.event_bus = MagicMock()
+    brain.head = MagicMock()
+    brain.eyes = MagicMock()
+    brain.mic = MagicMock()
+    brain.meeting_manager = None
+    brain.face_service = MagicMock()
+    brain.realtime_voice = MagicMock()
+    brain.realtime_voice._is_ready = True
+    brain.realtime_voice._ws = MagicMock()
+    brain._is_silent = MagicMock(return_value=False)
+    brain._last_unknown_greeting_time = 0.0
+    brain._unknown_greeting_asked = False
+    brain._last_speech_time = 0.0
+    brain.gestures = MagicMock()
+
+    # active_person starts as None or Mizan
+    brain.active_person = None
+
+    # Face appears with a new embedding
+    dummy_embedding = [0.1] * 128
+    face = DetectedFace(
+        bounding_box=(100, 100, 150, 150),
+        center=(175.0, 175.0),
+        confidence=0.85,
+        person=None,
+        is_known=False,
+        identity_state=IdentityState.UNKNOWN,
+        embedding=dummy_embedding,
+    )
+    brain.face_service.detect_and_recognize.return_value = [face]
+    brain.face_service.confirm_identity.return_value = [face]
+
+    brain.process_person_interaction(MagicMock())
+
+    # 1. Mizan must have auto-enrolled the embedding
+    updated_mizan = mem.get_person(mizan.id)
+    assert len(updated_mizan.face_embeddings) == 1
+    assert updated_mizan.face_embeddings[0] == dummy_embedding
+
+    # 2. active_person must be set to Mizan
+    assert brain.active_person is not None
+    assert brain.active_person.id == mizan.id
+
+    # 3. State must remain IDLE (not transition to GREETING for stranger)
+    assert brain.state.current_state == BehaviorState.IDLE
+    brain.realtime_voice.inject_context.assert_not_called()
+
+
 if __name__ == "__main__":
     test_servo_auto_relax_lifecycle()
     print("✓ test_servo_auto_relax_lifecycle PASSED")
