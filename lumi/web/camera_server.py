@@ -73,20 +73,29 @@ class _MJPEGHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:
-        if self.path == "/":
-            self._serve_html()
-        elif self.path == "/camera":
-            self._serve_mjpeg()
-        else:
-            self.send_error(404)
+        try:
+            if self.path == "/":
+                self._serve_html()
+            elif self.path == "/camera":
+                self._serve_mjpeg()
+            elif self.path in ("/favicon.ico", "/apple-touch-icon.png", "/robots.txt"):
+                self.send_response(204)
+                self.end_headers()
+            else:
+                self.send_error(404)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _serve_html(self) -> None:
-        content = _HTML_PAGE.encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
+        try:
+            content = _HTML_PAGE.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
 
     def _serve_mjpeg(self) -> None:
         self.send_response(200)
