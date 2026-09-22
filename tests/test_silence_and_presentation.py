@@ -405,6 +405,89 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         self.assertTrue(client.inject_context.called)
         self.assertIn("DO NOT ASK PERMISSION", client.inject_context.call_args[0][0])
 
+    def test_bengali_language_locking_and_transcription_codes(self):
+        """Verify Gemini Live setup explicitly configures Bengali BCP-47 languageCodes and language enforcement."""
+        from lumi.ai.gemini_live import GeminiLiveClient
+        from lumi.ai.prompts import LUMI_SYSTEM_PROMPT_BN, LUMI_SYSTEM_PROMPT_EN
+        import asyncio
+        import json
+
+        client = GeminiLiveClient.__new__(GeminiLiveClient)
+        client.model = "models/gemini-3.8-live"
+        client.tools = None
+        client.memory = None
+
+        ws_mock = MagicMock()
+        sent_messages = []
+        async def mock_send(msg):
+            sent_messages.append(json.loads(msg))
+        ws_mock.send = mock_send
+
+        asyncio.run(client._send_setup(ws_mock))
+        setup_data = sent_messages[0]["setup"]
+
+        # Check BCP-47 languageCodes
+        self.assertEqual(setup_data["inputAudioTranscription"]["languageCodes"], ["bn-BD", "en-US"])
+        self.assertEqual(setup_data["outputAudioTranscription"]["languageCodes"], ["bn-BD"])
+
+        # Check Bengali Language Lock enforcement in prompts
+        sys_text = setup_data["systemInstruction"]["parts"][0]["text"]
+        self.assertIn("MANDATORY LANGUAGE ENFORCEMENT", sys_text)
+        self.assertIn("বাংলা ছাড়া অন্য ভাষা সম্পূর্ণ নিষিদ্ধ", sys_text)
+        self.assertIn("হিন্দি", sys_text)
+
+        self.assertIn("MANDATORY LANGUAGE LOCK - BENGALI ONLY", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("কখনোই হিন্দি, স্প্যানিশ বা অন্য কোনো ভাষায় কথা বলবে না", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("Language Policy", LUMI_SYSTEM_PROMPT_EN)
+
+    def test_presentation_speech_unified_kore_voice_and_speaker_not_stopped(self):
+        """Verify start_presentation does NOT stop the audio stream, preserves Kore voice, and skips TTS when live."""
+        from lumi.speech.presentation import PresentationEngine
+        from lumi.core.state_manager import StateManager, BehaviorState
+        from lumi.core.event_bus import EventBus
+        from unittest.mock import MagicMock
+        import time
+
+        realtime_voice = MagicMock()
+        realtime_voice._running = True
+        realtime_voice._active_speech_target_end = 0.0
+        realtime_voice.inject_context = MagicMock()
+
+        speaker = MagicMock()
+        tts = MagicMock()
+        gestures = MagicMock()
+        eyes = MagicMock()
+        turn_arbiter = MagicMock()
+        state = StateManager()
+
+        engine = PresentationEngine(
+            tts=tts,
+            speaker=speaker,
+            gestures=gestures,
+            eyes=eyes,
+            state=state,
+            event_bus=EventBus(),
+            realtime_voice=realtime_voice,
+            turn_arbiter=turn_arbiter,
+        )
+
+        res = engine.start_presentation(topic="স্বাধীনতার ইতিহাস", duration_minutes=5.0)
+        self.assertIn("বক্তব্য শুরু হচ্ছে", res)
+        self.assertTrue(engine.is_presenting())
+        self.assertEqual(state.current_state, BehaviorState.PRESENTING)
+        self.assertTrue(turn_arbiter.set_presenting.called)
+        self.assertGreater(realtime_voice._active_speech_target_end, time.time() + 250.0)
+        self.assertEqual(realtime_voice._active_speech_topic, "স্বাধীনতার ইতিহাস")
+
+        # Verify TTS was NOT called because Gemini Live is streaming voice
+        self.assertFalse(tts.synthesize.called)
+
+        # Stop presentation
+        engine.stop_presentation(reason="user_stop")
+        self.assertFalse(engine.is_presenting())
+        self.assertEqual(realtime_voice._active_speech_target_end, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
+

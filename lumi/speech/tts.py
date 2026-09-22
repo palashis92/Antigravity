@@ -32,7 +32,32 @@ class BanglaTTS:
 
         logger.info(f"Synthesizing Bangla TTS: '{text[:60]}...' -> {output_path}")
 
-        # Try OpenAI TTS first
+        # Try Edge-TTS first (high-quality Microsoft neural Bangla voice)
+        try:
+            import asyncio
+            import edge_tts  # type: ignore
+
+            async def _synthesize_edge():
+                communicate = edge_tts.Communicate(text, voice="bn-BD-PradeepNeural", rate="+10%")
+                await communicate.save(output_path)
+
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        pool.submit(lambda: asyncio.run(_synthesize_edge())).result()
+                else:
+                    loop.run_until_complete(_synthesize_edge())
+            except RuntimeError:
+                asyncio.run(_synthesize_edge())
+
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return output_path
+        except (ImportError, Exception) as e:
+            logger.debug(f"Edge-TTS skipped or failed: {e}")
+
+        # Try OpenAI TTS next
         if self.api_key:
             try:
                 from openai import OpenAI

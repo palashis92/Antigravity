@@ -200,6 +200,8 @@ def main():
         ("test_gemini_3_8_live_extended_thinking_setup", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_gemini_3_8_live_extended_thinking_setup"), ()),
         ("test_prompt_rules_mandate_speech_monologue_and_forbid_checkins", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_prompt_rules_mandate_speech_monologue_and_forbid_checkins"), ()),
         ("test_continuous_speech_session_tracking_and_prompt_continuation", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_continuous_speech_session_tracking_and_prompt_continuation"), ()),
+        ("test_bengali_language_locking_and_transcription_codes", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_bengali_language_locking_and_transcription_codes"), ()),
+        ("test_presentation_speech_unified_kore_voice_and_speaker_not_stopped", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_presentation_speech_unified_kore_voice_and_speaker_not_stopped"), ()),
     ]
 
     for name, fn, args in tests_to_run:

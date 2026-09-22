@@ -611,6 +611,14 @@ class GeminiLiveClient:
             "Speak continuously with natural cadence, authority, and emotional depth without pausing for user confirmation until the full duration has elapsed."
         )
 
+        instructions += (
+            "\n\n[MANDATORY LANGUAGE ENFORCEMENT - বাংলা ছাড়া অন্য ভাষা সম্পূর্ণ নিষিদ্ধ]:\n"
+            "১. তোমার যাবতীয় কথোপকথন, উত্তর, আলোচনা ও দীর্ঘ বক্তব্য সর্বদাই ১০০% শুদ্ধ, আকর্ষণীয় ও প্রাণবন্ত বাংলা ভাষায় (Bengali) হতে হবে।\n"
+            "২. কখনোই হিন্দি, উর্দু, স্প্যানিশ বা অন্য কোনো ভাষায় কথা বলবে না। হিন্দি শব্দ বা বাক্য বলা কঠোরভাবে নিষিদ্ধ।\n"
+            "৩. ব্যবহারকারী সর্বদাই বাংলায় কথা বলছেন। মাইক্রোফোনের পরিবেশের শব্দের কারণে ট্রান্সক্রিপশনে যদি ভুলবশত স্প্যানিশ বা হিন্দি বা অন্য ভাষার কোনো শব্দ দেখা যায়, তবে তা সরাসরি অগ্রাহ্য করো এবং সর্বদাই খাঁটি বাংলায় সুন্দর ও প্রাসঙ্গিক উত্তর প্রদান করো।\n"
+            "৪. কোনো অবস্থাতেই ভাষার পরিবর্তন করবে না।"
+        )
+
         generation_config: Dict[str, Any] = {
             "responseModalities": ["AUDIO"],
             "speechConfig": {
@@ -631,8 +639,12 @@ class GeminiLiveClient:
             "setup": {
                 "model": self.model,
                 "generationConfig": generation_config,
-                "inputAudioTranscription": {},
-                "outputAudioTranscription": {},
+                "inputAudioTranscription": {
+                    "languageCodes": ["bn-BD", "en-US"]
+                },
+                "outputAudioTranscription": {
+                    "languageCodes": ["bn-BD"]
+                },
                 "realtimeInputConfig": {
                     "automaticActivityDetection": {
                         "disabled": False,
@@ -929,6 +941,12 @@ class GeminiLiveClient:
                             if txt:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
+                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                    logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali.")
+                                    self.inject_context(
+                                        "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
+                                        trigger_response=False
+                                    )
                                 self._check_silence_command(txt)
                                 self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
@@ -938,7 +956,13 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
-                                if getattr(self, "_active_speech_target_end", 0.0) > time.time():
+                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                    logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock.")
+                                    self.inject_context(
+                                        "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
+                                        trigger_response=True
+                                    )
+                                elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
                                     import re
                                     if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
                                         logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
@@ -952,6 +976,12 @@ class GeminiLiveClient:
                             if txt:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
+                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                    logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali.")
+                                    self.inject_context(
+                                        "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
+                                        trigger_response=False
+                                    )
                                 self._check_silence_command(txt)
                                 self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
@@ -961,7 +991,13 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
-                                if getattr(self, "_active_speech_target_end", 0.0) > time.time():
+                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                    logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock.")
+                                    self.inject_context(
+                                        "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
+                                        trigger_response=True
+                                    )
+                                elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
                                     import re
                                     if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
                                         logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
@@ -1070,12 +1106,25 @@ class GeminiLiveClient:
                                         dur = args.get("duration_seconds", 300.0) or 300.0
                                         self.set_silent_until(time.time() + float(dur))
                                     elif name == "start_presentation":
+                                        dur = float(args.get("duration_minutes", 3.0) or 3.0)
+                                        topic = args.get("topic", "বক্তব্য")
+                                        self._active_speech_target_end = time.time() + (dur * 60.0)
+                                        self._active_speech_topic = topic
+                                        self._speech_continuation_count = 0
+                                        if getattr(self, "turn_arbiter", None):
+                                            self.turn_arbiter.set_presenting(True)
+                                            if hasattr(self.turn_arbiter, "wake_up"):
+                                                self.turn_arbiter.wake_up(dur * 60.0 + 30.0)
+                                    elif name == "stop_presentation":
+                                        self._active_speech_target_end = 0.0
+                                        self._active_speech_topic = ""
+                                        if getattr(self, "turn_arbiter", None):
+                                            self.turn_arbiter.set_presenting(False)
                                         if self.speaker:
                                             try:
                                                 self.speaker.stop_stream()
                                             except Exception:
                                                 pass
-                                        self._speaker_active_until = 0.0
                                 except asyncio.TimeoutError:
                                     logger.error(f"Tool '{name}' execution timed out after 12.0s.")
                                     result = f"Error: Tool '{name}' execution timed out."

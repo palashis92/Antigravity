@@ -313,18 +313,29 @@ class PresentationEngine:
         self.state.transition_to(BehaviorState.PRESENTING, reason=f"start_presentation:{topic[:20]}")
         if self.turn_arbiter and hasattr(self.turn_arbiter, "set_presenting"):
             self.turn_arbiter.set_presenting(True)
+            if hasattr(self.turn_arbiter, "wake_up"):
+                self.turn_arbiter.wake_up(duration_minutes * 60.0 + 30.0)
         if self.eyes and hasattr(self.eyes, "set_expression"):
             self.eyes.set_expression("speaking")
 
-        # Invalidate/duck conversational Gemini Live audio during presentation (only if Gemini Live itself is not delivering the speech)
-        if self.realtime_voice and hasattr(self.realtime_voice, "inject_context"):
-            voice_end = getattr(self.realtime_voice, "_active_speech_target_end", 0.0)
-            if not isinstance(voice_end, (int, float)) or voice_end <= time.time():
+        duration_s = duration_minutes * 60.0
+        is_gemini_running = (
+            self.realtime_voice is not None
+            and getattr(self.realtime_voice, "_running", False)
+        )
+        if is_gemini_running:
+            self.realtime_voice._active_speech_target_end = time.time() + duration_s
+            self.realtime_voice._active_speech_topic = topic
+            self.realtime_voice._speech_continuation_count = 0
+            if hasattr(self.realtime_voice, "inject_context") and callable(self.realtime_voice.inject_context):
+                speech_cmd = (
+                    f"[MANDATORY CONTINUOUS SPEECH DIRECTIVE: {duration_minutes:.1f}-MINUTE SPEECH ON '{topic}']:\n"
+                    f"Deliver an uninterrupted, comprehensive monologue directly in your voice for the full {duration_minutes:.1f} minutes (~{int(duration_minutes*120)} words). "
+                    f"Do NOT stop after 1 minute! NEVER ask 'আমি কি বলতেই থাকবো?', 'আমি কি আরো বলব?', or any check-in questions! "
+                    f"Speak continuously with deep analysis, historical background, real-world examples, and inspiring vision."
+                )
                 try:
-                    self.realtime_voice.inject_context(
-                        f"[CRITICAL DIRECTIVE: LUMI IS NOW DELIVERING A FORMAL PRESENTATION ON '{topic}'. "
-                        f"Do NOT generate conversational audio or interrupt during this delivery.]"
-                    )
+                    self.realtime_voice.inject_context(speech_cmd, trigger_response=True)
                 except Exception as e:
                     logger.debug(f"Presentation context inject notice: {e}")
 
@@ -349,46 +360,69 @@ class PresentationEngine:
         return msg
 
     def _delivery_worker(self, segments: List[str], topic: str) -> None:
-        """Sequential non-blocking paragraph delivery with gestural pacing."""
+        """Sequential non-blocking speech delivery with gestural pacing."""
         logger.info(f"Presentation worker started for topic: '{topic}' ({len(segments)} segments).")
         try:
-            for idx, text in enumerate(segments):
-                if self._stop_requested:
-                    logger.info("Presentation worker detected stop request. Halting delivery.")
-                    break
+            voice_end = getattr(self.realtime_voice, "_active_speech_target_end", 0.0)
+            is_gemini_active = (
+                self.realtime_voice is not None
+                and getattr(self.realtime_voice, "_running", False)
+                and isinstance(voice_end, (int, float))
+                and voice_end > time.time()
+            )
 
-                logger.info(f"[Presentation Segment {idx + 1}/{len(segments)}]: {text[:50]}...")
+            if is_gemini_active:
+                logger.info(f"Gemini Live is actively streaming speech on '{topic}'. Worker providing co-verbal gesture accompaniment.")
+                step_idx = 0
+                while not self._stop_requested:
+                    current_end = getattr(self.realtime_voice, "_active_speech_target_end", 0.0)
+                    if not isinstance(current_end, (int, float)) or time.time() >= current_end:
+                        break
 
-                # Dynamic expressive co-verbal gestures
-                if self.gestures and not getattr(self.gestures, "is_playing", False):
-                    if idx == 0 and hasattr(self.gestures, "greet"):
-                        self.gestures.play_async(self.gestures.greet, name="pres_greet")
-                    elif hasattr(self.gestures, "play_conversational_step"):
-                        self.gestures.play_async(self.gestures.play_conversational_step, name=f"pres_step_{idx}")
+                    # Dynamic expressive co-verbal gestures while Gemini streams speech
+                    if self.gestures and not getattr(self.gestures, "is_playing", False):
+                        if step_idx == 0 and hasattr(self.gestures, "greet"):
+                            self.gestures.play_async(self.gestures.greet, name="pres_greet")
+                        elif hasattr(self.gestures, "play_conversational_step"):
+                            self.gestures.play_async(self.gestures.play_conversational_step, name=f"pres_step_{step_idx}")
+                    step_idx += 1
 
-                # Synthesize and play audio (only if Gemini Live isn't already streaming the speech natively)
-                voice_end = getattr(self.realtime_voice, "_active_speech_target_end", 0.0)
-                is_gemini_speaking = (
-                    self.realtime_voice is not None
-                    and isinstance(voice_end, (int, float))
-                    and voice_end > time.time()
-                )
-                if not is_gemini_speaking:
+                    # Sleep in responsive slices to detect stop requests immediately
+                    for _ in range(30):
+                        if self._stop_requested:
+                            break
+                        cur_end = getattr(self.realtime_voice, "_active_speech_target_end", 0.0)
+                        if isinstance(cur_end, (int, float)) and time.time() >= cur_end:
+                            break
+                        time.sleep(0.1)
+            else:
+                # Offline / Fallback Monologue Delivery via TTS
+                for idx, text in enumerate(segments):
+                    if self._stop_requested:
+                        logger.info("Presentation worker detected stop request. Halting delivery.")
+                        break
+
+                    logger.info(f"[Presentation Segment {idx + 1}/{len(segments)}]: {text[:50]}...")
+
+                    # Dynamic expressive co-verbal gestures
+                    if self.gestures and not getattr(self.gestures, "is_playing", False):
+                        if idx == 0 and hasattr(self.gestures, "greet"):
+                            self.gestures.play_async(self.gestures.greet, name="pres_greet")
+                        elif hasattr(self.gestures, "play_conversational_step"):
+                            self.gestures.play_async(self.gestures.play_conversational_step, name=f"pres_step_{idx}")
+
                     audio_path = self.tts.synthesize(text)
                     if self._stop_requested:
                         break
 
                     if audio_path and hasattr(self.speaker, "play_file"):
                         self.speaker.play_file(audio_path, block=True)
-                else:
-                    # Let co-verbal pacing run alongside Gemini Live speech
-                    time.sleep(2.5)
 
-                if self._stop_requested:
-                    break
+                    if self._stop_requested:
+                        break
 
-                # Rhetorical pause between paragraphs (0.6 - 0.9s)
-                time.sleep(0.7)
+                    # Rhetorical pause between paragraphs (0.6 - 0.9s)
+                    time.sleep(0.7)
 
         except Exception as e:
             logger.error(f"Error during presentation speech delivery: {e}")
@@ -413,15 +447,20 @@ class PresentationEngine:
                 self.state.transition_to(BehaviorState.LISTENING, reason="presentation_complete")
 
             # Notify Gemini Live that presentation has finished and normal interaction resumes
-            if self.realtime_voice and hasattr(self.realtime_voice, "inject_context"):
-                try:
-                    status_desc = "halted by user command" if was_stopped else "concluded successfully"
-                    self.realtime_voice.inject_context(
-                        f"[SYSTEM ALERT: Presentation on '{topic}' has {status_desc}. "
-                        f"LUMI is now listening and ready to engage in normal conversation.]"
-                    )
-                except Exception as e:
-                    logger.debug(f"Presentation completion inject notice: {e}")
+            if self.realtime_voice:
+                if was_stopped:
+                    self.realtime_voice._active_speech_target_end = 0.0
+                    self.realtime_voice._active_speech_topic = ""
+                if hasattr(self.realtime_voice, "inject_context"):
+                    try:
+                        status_desc = "halted by user command" if was_stopped else "concluded successfully"
+                        self.realtime_voice.inject_context(
+                            f"[SYSTEM ALERT: Presentation on '{topic}' has {status_desc}. "
+                            f"LUMI is now listening and ready to engage in normal conversation.]",
+                            trigger_response=False
+                        )
+                    except Exception as e:
+                        logger.debug(f"Presentation completion inject notice: {e}")
 
             self.event_bus.emit(
                 "presentation.complete",
@@ -439,6 +478,10 @@ class PresentationEngine:
 
         if self.turn_arbiter and hasattr(self.turn_arbiter, "set_presenting"):
             self.turn_arbiter.set_presenting(False)
+
+        if self.realtime_voice:
+            self.realtime_voice._active_speech_target_end = 0.0
+            self.realtime_voice._active_speech_topic = ""
 
         logger.info(f"Halting presentation delivery. Reason: {reason or 'user_stop'}")
 
