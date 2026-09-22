@@ -279,3 +279,149 @@ def test_turn_arbiter_silence_streaming_during_dialogue():
     assert arbiter.should_stream_mic(energy=160.0), "Loud speech should auto-wake dialogue"
     assert arbiter.is_in_dialogue()
 
+
+def test_gemini_live_multi_tool_call_consolidation():
+    """Verify GeminiLiveClient sends a single consolidated toolResponse for multi-tool calls."""
+    import asyncio
+    import json
+    from unittest.mock import MagicMock
+    from lumi.ai.gemini_live import GeminiLiveClient
+    from lumi.ai.tools import ToolRegistry
+
+    registry = ToolRegistry()
+    registry.register("tool_a", lambda x: f"res_a_{x}", "Tool A")
+    registry.register("tool_b", lambda y: f"res_b_{y}", "Tool B")
+
+    client = GeminiLiveClient(
+        mic=MagicMock(),
+        speaker=MagicMock(),
+        eyes=MagicMock(),
+        gestures=MagicMock(),
+        state=MagicMock(),
+        memory=MagicMock(),
+        event_bus=MagicMock(),
+        tools=registry,
+    )
+    client._running = True
+
+    incoming_msg = json.dumps({
+        "toolCall": {
+            "functionCalls": [
+                {"name": "tool_a", "id": "call-1", "args": {"x": 10}},
+                {"name": "tool_b", "id": "call-2", "args": {"y": 20}},
+            ]
+        }
+    })
+
+    sent_messages = []
+
+    class MockWS:
+        def __init__(self):
+            self._messages = [incoming_msg]
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._messages:
+                return self._messages.pop(0)
+            client._running = False
+            raise StopAsyncIteration
+
+        async def send(self, data):
+            sent_messages.append(json.loads(data))
+
+    ws = MockWS()
+    asyncio.run(client._receive_events(ws))
+
+    # Verify exactly ONE toolResponse message was sent containing both responses
+    assert len(sent_messages) == 1, f"Expected 1 toolResponse message, got {len(sent_messages)}"
+    resp = sent_messages[0]
+    assert "toolResponse" in resp
+    func_responses = resp["toolResponse"]["functionResponses"]
+    assert len(func_responses) == 2
+    assert func_responses[0]["name"] == "tool_a"
+    assert func_responses[0]["id"] == "call-1"
+    assert func_responses[0]["response"] == {"result": "res_a_10"}
+    assert func_responses[1]["name"] == "tool_b"
+    assert func_responses[1]["id"] == "call-2"
+    assert func_responses[1]["response"] == {"result": "res_b_20"}
+
+
+def test_gemini_live_barge_in_suppresses_fallback_tts():
+    """Verify that when a user barge-in occurs, fallback TTS does not speak the interrupted turn."""
+    import asyncio
+    import json
+    from unittest.mock import MagicMock
+    from lumi.ai.gemini_live import GeminiLiveClient
+
+    tts = MagicMock()
+    speaker = MagicMock()
+    client = GeminiLiveClient(
+        mic=MagicMock(),
+        speaker=speaker,
+        eyes=MagicMock(),
+        gestures=MagicMock(),
+        state=MagicMock(),
+        memory=MagicMock(),
+        event_bus=MagicMock(),
+        tts=tts,
+    )
+    tts.reset_mock()
+    client._running = True
+
+    messages = [
+        json.dumps({"serverContent": {"outputTranscription": {"text": "আমার নাম লুমি"}}}),
+        json.dumps({"serverContent": {"interrupted": True}}),
+        json.dumps({"serverContent": {"turnComplete": True}}),
+    ]
+
+    class MockWS:
+        def __init__(self):
+            self._messages = list(messages)
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            if self._messages:
+                return self._messages.pop(0)
+            client._running = False
+            raise StopAsyncIteration
+
+        async def send(self, data):
+            pass
+
+    asyncio.run(client._receive_events(MockWS()))
+
+    # Verify fallback TTS was NOT called because turn was interrupted
+    tts.synthesize.assert_not_called()
+    speaker.play_file.assert_not_called()
+
+
+def test_behavior_manager_does_not_interrupt_listening_or_dialogue():
+    """Verify BehaviorManager does not interrupt LISTENING or active conversation on face spotted."""
+    from lumi.core.behavior_manager import BehaviorManager
+    from lumi.core.state_manager import StateManager, BehaviorState
+    from lumi.core.event_bus import EventBus
+
+    sm = StateManager(BehaviorState.LISTENING)
+    bus = EventBus()
+    bm = BehaviorManager(state_manager=sm, event_bus=bus)
+
+    # When in LISTENING state, spotting a face must NOT transition to OBSERVING or GREETING
+    bm.on_person_spotted("Mizan", is_known=True)
+    assert sm.current_state == BehaviorState.LISTENING
+
+    # When in GREETING state, spotting a face must NOT transition
+    sm.transition_to(BehaviorState.GREETING, reason="test")
+    bm.on_person_spotted("Mizan", is_known=True)
+    assert sm.current_state == BehaviorState.GREETING
+
+    # When IDLE, spotting a face DOES transition to OBSERVING
+    sm.transition_to(BehaviorState.IDLE, reason="test")
+    bm._last_interaction_times.clear()
+    bm.on_person_spotted("Mizan", is_known=True)
+    assert sm.current_state == BehaviorState.OBSERVING
+
+

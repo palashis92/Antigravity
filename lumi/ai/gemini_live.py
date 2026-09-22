@@ -43,6 +43,7 @@ class GeminiLiveClient:
         camera: Optional[Any] = None,
         api_key: Optional[str] = None,
         turn_arbiter: Optional[Any] = None,
+        tts: Optional[Any] = None,
     ) -> None:
         self.mic = mic
         self.speaker = speaker
@@ -75,9 +76,15 @@ class GeminiLiveClient:
         self._last_active_time = time.time()
         self._oww_model = None
         
-        from ..speech.tts import BanglaTTS
-        self.tts = BanglaTTS()
-        self.wake_audio_path = self.tts.synthesize("জ্বী বলুন")
+        if tts is not None:
+            self.tts = tts
+        else:
+            from ..speech.tts import BanglaTTS
+            self.tts = BanglaTTS()
+        try:
+            self.wake_audio_path = self.tts.synthesize("জ্বী বলুন") if hasattr(self.tts, "synthesize") else None
+        except Exception:
+            self.wake_audio_path = None
         
         self._last_video_send = 0.0
         self._last_speech_motion_time = 0.0
@@ -830,6 +837,7 @@ class GeminiLiveClient:
         user_buffer = []
         lumi_buffer = []
         turn_had_audio = False
+        was_interrupted_this_turn = False
         try:
             async for message in ws:
                 if not self._running: break
@@ -910,6 +918,7 @@ class GeminiLiveClient:
                             print("🤖 [LUMI STATE]: Interrupted by user.")
                             self._speaker_active_until = 0.0
                             turn_had_audio = False
+                            was_interrupted_this_turn = True
                             if self.state and hasattr(self.state, "transition_to"):
                                 self.state.transition_to(BehaviorState.LISTENING, reason="user_barge_in")
                             if getattr(self, "turn_arbiter", None):
@@ -1053,7 +1062,8 @@ class GeminiLiveClient:
 
                             # Dual-safety net: If Gemini generated text but no audio streamed,
                             # synthesize via BanglaTTS and play so the robot is NEVER mute!
-                            if l_text and not turn_had_audio and not self.is_silent():
+                            # Guard: Do NOT synthesize if user interrupted/barged-in (they deliberately stopped LUMI)
+                            if l_text and not turn_had_audio and not was_interrupted_this_turn and not self.is_silent():
                                 if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
                                     logger.debug("Suppressing Gemini Live fallback TTS: presentation mode active.")
                                 else:
@@ -1066,19 +1076,23 @@ class GeminiLiveClient:
                                         logger.warning(f"Fallback TTS synthesis error: {e}")
 
                             turn_had_audio = False
+                            was_interrupted_this_turn = False
                             user_buffer.clear()
                             lumi_buffer.clear()
 
+                            # Clear software AEC speaker ducking so user's subsequent reply is not dropped
+                            self._speaker_active_until = min(getattr(self, "_speaker_active_until", 0.0), time.time())
+
                             if getattr(self, "turn_arbiter", None):
                                 self.turn_arbiter.notify_speaker_stopped()
-                                self.turn_arbiter.wake_up(15.0)
+                                self.turn_arbiter.wake_up(25.0)
 
                             # Transition state back to LISTENING if awake (only if not delivering presentation/speech), else IDLE
                             if self.state and hasattr(self.state, "transition_to"):
                                 if getattr(self.state, "current_state", None) != BehaviorState.PRESENTING and not (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()) and not is_active_speech:
                                     if self.is_awake():
                                         self.state.transition_to(BehaviorState.LISTENING, reason="turn_complete_listening")
-                                        self.wake_up(15.0)
+                                        self.wake_up(25.0)
                                     else:
                                         self.state.transition_to(BehaviorState.IDLE, reason="turn_complete_idle")
 
@@ -1087,15 +1101,20 @@ class GeminiLiveClient:
                                 if self.gestures and hasattr(self.gestures, "idle_pose"):
                                     self.gestures.play_async(self.gestures.idle_pose, name="turn_complete_rest")
                             
-                    # Handle Tool Calls
-                    if "toolCall" in data:
-                        for call in data["toolCall"].get("functionCalls", []):
+                    # Handle Tool Calls (support top-level toolCall and serverContent.toolCall)
+                    tool_call_data = data.get("toolCall")
+                    if not tool_call_data and "serverContent" in data and isinstance(data["serverContent"], dict):
+                        tool_call_data = data["serverContent"].get("toolCall")
+
+                    if tool_call_data and "functionCalls" in tool_call_data:
+                        function_responses = []
+                        for call in tool_call_data.get("functionCalls", []):
                             name = call.get("name")
                             call_id = call.get("id")
                             args = call.get("args", {})
                             
                             if name and self.tools and name in self.tools.tools:
-                                logger.info(f"Gemini requested tool: {name}")
+                                logger.info(f"Gemini requested tool: {name} (id: {call_id})")
                                 try:
                                     tool_func = self.tools.tools[name]
                                     result = await asyncio.wait_for(
@@ -1135,16 +1154,24 @@ class GeminiLiveClient:
                                 logger.warning(f"Gemini requested unknown tool: {name}")
                                 result = f"Error: Tool '{name}' is not available."
                                     
+                            func_resp: Dict[str, Any] = {
+                                "name": name,
+                                "response": {"result": result if isinstance(result, (dict, list, str, int, float, bool)) else str(result)}
+                            }
+                            if call_id:
+                                func_resp["id"] = call_id
+                            function_responses.append(func_resp)
+
+                        # CRITICAL: Send ALL function responses in a SINGLE toolResponse message.
+                        # Splitting multiple tool calls into separate messages breaks the Gemini Live WebSocket protocol!
+                        if function_responses:
                             resp = {
                                 "toolResponse": {
-                                    "functionResponses": [{
-                                        "name": name,
-                                        "id": call_id,
-                                        "response": {"result": result}
-                                    }]
+                                    "functionResponses": function_responses
                                 }
                             }
                             await ws.send(json.dumps(resp))
+                            logger.info(f"✅ Sent consolidated toolResponse with {len(function_responses)} function(s) to Gemini Live.")
                 except Exception as e:
                     logger.debug(f"Error parsing Gemini message: {e}")
             logger.warning(f"Gemini receive loop ended. Close code: {getattr(ws, 'close_code', 'Unknown')}, reason: {getattr(ws, 'close_reason', 'Unknown')}")

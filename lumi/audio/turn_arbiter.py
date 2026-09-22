@@ -23,7 +23,7 @@ class AudioTurnArbiter:
     def __init__(
         self,
         echo_tail_s: float = 0.35,
-        turn_window_s: float = 12.0,
+        turn_window_s: float = 25.0,
         energy_threshold: float = 100.0,
     ) -> None:
         self.echo_tail_s = echo_tail_s

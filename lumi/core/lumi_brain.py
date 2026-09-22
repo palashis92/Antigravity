@@ -841,6 +841,10 @@ class LumiBrain:
             if not is_speaker_active and not self._is_silent() and not is_presenting:
                 if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy >= ENERGY_THRESHOLD:
                     self._last_speech_time = time.time()
+                    if hasattr(self, "turn_arbiter"):
+                        self.turn_arbiter.wake_up(25.0)
+                    if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+                        self.realtime_voice.wake_up(25.0)
                 if event == SpeechEvent.SPEECH_START:
                     self.trigger_acoustic_reflex(energy=energy)
 
@@ -1369,9 +1373,17 @@ class LumiBrain:
                 logger.debug(f"Silent mode active: suppressing greeting for {person.name}.")
                 return
 
-            # If LUMI is actively speaking, presenting, or listening in active dialogue, do not interrupt
-            if self.state.current_state in (BehaviorState.SPEAKING, BehaviorState.PRESENTING, BehaviorState.THINKING) or (
-                self.state.current_state == BehaviorState.LISTENING and hasattr(self, "turn_arbiter") and self.turn_arbiter.is_in_dialogue()
+            # If LUMI is actively speaking, listening, presenting, or in active dialogue, do not interrupt
+            if self.state.current_state in (
+                BehaviorState.SPEAKING,
+                BehaviorState.LISTENING,
+                BehaviorState.PRESENTING,
+                BehaviorState.THINKING,
+                BehaviorState.GREETING,
+                BehaviorState.MEETING,
+                BehaviorState.OBSERVING,
+            ) or (
+                hasattr(self, "turn_arbiter") and self.turn_arbiter.is_in_dialogue()
             ):
                 return
 
@@ -1485,7 +1497,7 @@ class LumiBrain:
                     audio_path = self.tts.synthesize(greeting_text)
                     if audio_path:
                         self.speaker.play_file(audio_path, block=False)
-                self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
+                    self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
         else:
             # Unrecognized face in current frame
             owner = self.get_owner()
@@ -1591,7 +1603,7 @@ class LumiBrain:
                 audio_path = self.tts.synthesize(greeting_text)
                 if audio_path:
                     self.speaker.play_file(audio_path, block=False)
-            self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
+                self.state.transition_to(BehaviorState.IDLE, reason="greeting_complete")
 
     # =========================================================================
     # Realtime Tools Implementation

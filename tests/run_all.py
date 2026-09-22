@@ -164,6 +164,9 @@ def main():
         ("test_gemini_live_barge_in_telemetry", tp2.test_gemini_live_barge_in_telemetry, ()),
         ("test_gemini_live_turn_arbiter_sync_and_speech_wake", tp2.test_gemini_live_turn_arbiter_sync_and_speech_wake, ()),
         ("test_turn_arbiter_silence_streaming_during_dialogue", tp2.test_turn_arbiter_silence_streaming_during_dialogue, ()),
+        ("test_gemini_live_multi_tool_call_consolidation", tp2.test_gemini_live_multi_tool_call_consolidation, ()),
+        ("test_gemini_live_barge_in_suppresses_fallback_tts", tp2.test_gemini_live_barge_in_suppresses_fallback_tts, ()),
+        ("test_behavior_manager_does_not_interrupt_listening_or_dialogue", tp2.test_behavior_manager_does_not_interrupt_listening_or_dialogue, ()),
         # Phase 3: Vision & Perception Throughput
         ("test_face_recognition_track_caching_throughput", tp3.test_face_recognition_track_caching_throughput, ()),
         ("test_target_lost_search_hysteresis_and_smooth_pan", tp3.test_target_lost_search_hysteresis_and_smooth_pan, ()),
