@@ -341,6 +341,10 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         base_setup = sent_messages[0]["setup"]
         self.assertNotIn("thinkingConfig", base_setup["generationConfig"])
         self.assertNotIn("behavior", base_setup["tools"][0]["functionDeclarations"][0])
+        self.assertIn("realtimeInputConfig", base_setup)
+        self.assertIn("contextWindowCompression", base_setup)
+        self.assertIn("slidingWindow", base_setup["contextWindowCompression"])
+        self.assertEqual(base_setup["realtimeInputConfig"]["automaticActivityDetection"]["silenceDurationMs"], 800)
 
         # Extended Thinking model (gemini-3.8-live-extended-thinking)
         client_ext = GeminiLiveClient.__new__(GeminiLiveClient)

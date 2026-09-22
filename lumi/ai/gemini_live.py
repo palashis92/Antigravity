@@ -56,8 +56,8 @@ class GeminiLiveClient:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.turn_arbiter = turn_arbiter
         
-        # Default to Gemini 3.8 Live API (supports models/gemini-3.8-live and models/gemini-3.8-live-extended-thinking)
-        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.8-live")
+        # Default to Gemini Live production model (models/gemini-3.1-flash-live-preview) with override support
+        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.1-flash-live-preview")
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -633,6 +633,17 @@ class GeminiLiveClient:
                 "generationConfig": generation_config,
                 "inputAudioTranscription": {},
                 "outputAudioTranscription": {},
+                "realtimeInputConfig": {
+                    "automaticActivityDetection": {
+                        "disabled": False,
+                        "startOfSpeechSensitivity": "START_SENSITIVITY_HIGH",
+                        "endOfSpeechSensitivity": "END_SENSITIVITY_HIGH",
+                        "silenceDurationMs": 800
+                    }
+                },
+                "contextWindowCompression": {
+                    "slidingWindow": {}
+                },
                 "systemInstruction": {
                     "parts": [{"text": instructions}]
                 }
@@ -769,26 +780,32 @@ class GeminiLiveClient:
                             break
                 
                 if self.is_awake() and getattr(self, "_is_ready", False):
-                    # Send video frame if camera is available (on-demand / periodic)
+                    # Send video frame if camera is available (throttled to 4.0s to avoid turn starvation)
                     now = time.time()
-                    if self.camera and self.camera.is_available() and (now - self._last_video_send > 1.0):
-                        frame = self.camera.get_frame()
-                        if frame is not None:
-                            try:
-                                import cv2
-                                _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 50])
-                                video_b64 = base64.b64encode(buffer).decode("utf-8")
-                                await ws.send(json.dumps({
-                                    "realtimeInput": {
-                                        "video": {
-                                            "mimeType": "image/jpeg",
-                                            "data": video_b64
+                    if self.camera and self.camera.is_available() and (now - self._last_video_send > 4.0):
+                        # Don't send video frame if head is in mid-pan movement (avoids motion blur)
+                        is_head_moving = getattr(getattr(self, "gestures", None), "is_playing", False) or getattr(self, "_is_panning", False)
+                        if not is_head_moving:
+                            frame = self.camera.get_frame()
+                            if frame is not None:
+                                try:
+                                    import cv2
+                                    h, w = frame.shape[:2]
+                                    if w > 320:
+                                        frame = cv2.resize(frame, (320, int(h * 320 / w)))
+                                    _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 35])
+                                    video_b64 = base64.b64encode(buffer).decode("utf-8")
+                                    await ws.send(json.dumps({
+                                        "realtimeInput": {
+                                            "video": {
+                                                "mimeType": "image/jpeg",
+                                                "data": video_b64
+                                            }
                                         }
-                                    }
-                                }))
-                            except Exception as e:
-                                logger.debug(f'Video send error: {e}')
-                        self._last_video_send = now
+                                    }))
+                                except Exception as e:
+                                    logger.debug(f'Video send error: {e}')
+                            self._last_video_send = now
                 
                 await asyncio.sleep(0.01)
         except asyncio.CancelledError:
@@ -953,6 +970,15 @@ class GeminiLiveClient:
                                             trigger_response=True
                                         )
 
+                        if "interimInputTranscription" in content:
+                            txt = _get_text(content['interimInputTranscription'])
+                            if txt:
+                                logger.debug(f"🗣️  [USER (interim)]: {txt}")
+                                self.wake_up(15.0)
+
+                        if content.get("waitingForInput"):
+                            logger.debug("Gemini Live waiting for user input...")
+
                         # End of turn detection
                         if content.get("turnComplete"):
                             u_text = " ".join(user_buffer).strip()
@@ -1009,12 +1035,14 @@ class GeminiLiveClient:
 
                             if getattr(self, "turn_arbiter", None):
                                 self.turn_arbiter.notify_speaker_stopped()
+                                self.turn_arbiter.wake_up(15.0)
 
                             # Transition state back to LISTENING if awake (only if not delivering presentation/speech), else IDLE
                             if self.state and hasattr(self.state, "transition_to"):
                                 if getattr(self.state, "current_state", None) != BehaviorState.PRESENTING and not (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()) and not is_active_speech:
                                     if self.is_awake():
                                         self.state.transition_to(BehaviorState.LISTENING, reason="turn_complete_listening")
+                                        self.wake_up(15.0)
                                     else:
                                         self.state.transition_to(BehaviorState.IDLE, reason="turn_complete_idle")
 
@@ -1116,15 +1144,11 @@ class GeminiLiveClient:
                 logger.warning("Dropped context injection: WS not ready.")
                 return
                 
+            # Gemini Live API: In-session text updates must be sent via realtimeInput.
+            # (clientContent is only permitted for initial session history seeding).
             event = {
-                "clientContent": {
-                    "turns": [
-                        {
-                            "role": "user",
-                            "parts": [{"text": text}]
-                        }
-                    ],
-                    "turnComplete": trigger_response
+                "realtimeInput": {
+                    "text": text
                 }
             }
             try:

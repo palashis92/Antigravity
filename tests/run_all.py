@@ -167,6 +167,7 @@ def main():
         # Phase 3: Vision & Perception Throughput
         ("test_face_recognition_track_caching_throughput", tp3.test_face_recognition_track_caching_throughput, ()),
         ("test_target_lost_search_hysteresis_and_smooth_pan", tp3.test_target_lost_search_hysteresis_and_smooth_pan, ()),
+        ("test_head_search_suppressed_during_active_dialogue", tp3.test_head_search_suppressed_during_active_dialogue, ()),
         ("test_anjum_mode_three_frame_confirmation_and_adult_exit", tp3.test_anjum_mode_three_frame_confirmation_and_adult_exit, ()),
         # Phase 4: Architecture & FSM Robustness
         ("test_state_manager_watchdog_recovers_stuck_transient_state", tp4.test_state_manager_watchdog_recovers_stuck_transient_state, ()),

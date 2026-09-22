@@ -1170,6 +1170,26 @@ class LumiBrain:
         if not faces:
             self._last_detected_faces = []
             now = time.time()
+
+            # Suppress head search panning during active conversation or presentation
+            is_active_dialogue = (
+                (hasattr(self, "turn_arbiter") and self.turn_arbiter.is_in_dialogue())
+                or (hasattr(self, "state") and self.state.current_state in (
+                    BehaviorState.LISTENING,
+                    BehaviorState.SPEAKING,
+                    BehaviorState.THINKING,
+                    BehaviorState.PRESENTING,
+                    BehaviorState.GREETING,
+                    BehaviorState.OBSERVING,
+                ))
+            )
+            if is_active_dialogue:
+                return
+
+            # Check search cooldown (prevent head oscillation loop)
+            if (now - getattr(self, "_last_search_complete_time", 0.0)) < 8.0:
+                return
+
             # If we were tracking someone who just left the camera frame:
             if self._had_tracked_face and not getattr(self.gestures, "is_playing", False):
                 time_since_lost = now - self._last_face_seen_time
@@ -1224,6 +1244,7 @@ class LumiBrain:
                 elif time_since_lost >= 8.0 and self._search_phase == 2 and (now - self._last_search_move_time >= 2.5):
                     self._search_phase = 3
                     self._had_tracked_face = False
+                    self._last_search_complete_time = now
                     from ..core.telemetry import get_telemetry
                     get_telemetry().record_event("TEL-07", context="search_phase_3_home")
                     logger.info("🏠 Search complete. No face detected. Returning head and gaze to center.")
@@ -1346,6 +1367,12 @@ class LumiBrain:
             # Checked BEFORE should_interact so person's cooldown is NOT burned during silence!
             if self._is_silent():
                 logger.debug(f"Silent mode active: suppressing greeting for {person.name}.")
+                return
+
+            # If LUMI is actively speaking, presenting, or listening in active dialogue, do not interrupt
+            if self.state.current_state in (BehaviorState.SPEAKING, BehaviorState.PRESENTING, BehaviorState.THINKING) or (
+                self.state.current_state == BehaviorState.LISTENING and hasattr(self, "turn_arbiter") and self.turn_arbiter.is_in_dialogue()
+            ):
                 return
 
             if self.face_service.should_interact(person.id, cooldown_s=cooldown_val):

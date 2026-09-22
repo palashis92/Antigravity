@@ -196,3 +196,44 @@ def test_anjum_mode_three_frame_confirmation_and_adult_exit():
             brain.process_person_interaction(MagicMock())
     assert brain.state.current_state != BehaviorState.ANJUM_MODE
     assert brain._anjum_consecutive_frames == 0
+
+
+def test_head_search_suppressed_during_active_dialogue():
+    """Verify target-lost search is suppressed during active conversation or listening."""
+    from lumi.core.lumi_brain import LumiBrain
+
+    settings = load_settings()
+    sm = StateManager(BehaviorState.LISTENING)
+    eb = MagicMock()
+    mem = MagicMock()
+    servo = MagicMock()
+    eyes = MagicMock()
+    cam = MagicMock()
+    mic = MagicMock()
+    spk = MagicMock()
+
+    brain = LumiBrain(
+        settings=settings,
+        state_manager=sm,
+        event_bus=eb,
+        memory_manager=mem,
+        servo_controller=servo,
+        eye_renderer=eyes,
+        camera=cam,
+        mic=mic,
+        speaker=spk,
+    )
+
+    now = 1000.0
+    brain._had_tracked_face = True
+    brain._search_phase = 0
+    brain._last_face_seen_time = now - 3.0
+    brain.head = MagicMock()
+
+    with patch("time.time", return_value=now):
+        brain.process_person_interaction(None)
+
+    # During LISTENING, search MUST be suppressed and head must NOT pan
+    assert brain._search_phase == 0
+    brain.head.pan.assert_not_called()
+
