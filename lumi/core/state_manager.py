@@ -28,6 +28,7 @@ class BehaviorState(str, Enum):
     SLEEP = "SLEEP"
     MEETING = "MEETING"
     ANJUM_MODE = "ANJUM_MODE"
+    PRESENTING = "PRESENTING"
 
 
 # Default mapping from behavior state to corresponding eye expression
@@ -46,6 +47,7 @@ STATE_EYE_EXPRESSIONS: Dict[BehaviorState, str] = {
     BehaviorState.SLEEP: "sleepy",
     BehaviorState.MEETING: "listening",
     BehaviorState.ANJUM_MODE: "excited",
+    BehaviorState.PRESENTING: "speaking",
 }
 
 # Transient states subject to watchdog timeout recovery
@@ -75,11 +77,14 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.MEETING,
         BehaviorState.ANJUM_MODE,
         BehaviorState.SPEAKING,
+        BehaviorState.PRESENTING,
     },
     BehaviorState.OBSERVING: {
         BehaviorState.IDLE,
         BehaviorState.GREETING,
         BehaviorState.LISTENING,
+        BehaviorState.SPEAKING,
+        BehaviorState.PRESENTING,
         BehaviorState.VISION_ANALYSIS,
         BehaviorState.ERROR,
         BehaviorState.SLEEP,
@@ -104,6 +109,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.SEARCHING,
         BehaviorState.ERROR,
         BehaviorState.ANJUM_MODE,
+        BehaviorState.PRESENTING,
     },
     BehaviorState.THINKING: {
         BehaviorState.SPEAKING,
@@ -120,6 +126,7 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.GREETING,
         BehaviorState.ERROR,
         BehaviorState.ANJUM_MODE,
+        BehaviorState.PRESENTING,
     },
     BehaviorState.SEARCHING: {
         BehaviorState.THINKING,
@@ -162,6 +169,12 @@ VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
         BehaviorState.IDLE,
         BehaviorState.SPEAKING,
         BehaviorState.LISTENING,
+        BehaviorState.ERROR,
+    },
+    BehaviorState.PRESENTING: {
+        BehaviorState.IDLE,
+        BehaviorState.LISTENING,
+        BehaviorState.SPEAKING,
         BehaviorState.ERROR,
     },
 }

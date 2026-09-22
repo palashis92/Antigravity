@@ -35,7 +35,20 @@ class AudioTurnArbiter:
         self._speaker_active_until: float = 0.0
         self._dialogue_active_until: float = 0.0
         self._is_speaker_playing: bool = False
+        self._is_presenting: bool = False
         self._last_barge_in_time: float = 0.0
+
+    # ------------------------------------------------------------------
+    # Presentation Mode Management
+    # ------------------------------------------------------------------
+    def set_presenting(self, presenting: bool) -> None:
+        with self._lock:
+            self._is_presenting = presenting
+        logger.info(f"Presentation mode arbiter state: {presenting}")
+
+    def is_presenting(self) -> bool:
+        with self._lock:
+            return self._is_presenting
 
     # ------------------------------------------------------------------
     # Silence Mode Management
@@ -126,7 +139,11 @@ class AudioTurnArbiter:
             if now < self._silent_until:
                 return False
 
-            # 2. Check speaker echo ducking window
+            # 2. Check presentation mode (suppress mic streaming to cloud during monologue)
+            if self._is_presenting:
+                return False
+
+            # 3. Check speaker echo ducking window
             if self._is_speaker_playing or (now < (self._speaker_active_until + self.echo_tail_s)):
                 return False
 

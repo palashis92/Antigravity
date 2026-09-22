@@ -292,6 +292,42 @@ class LumiBrain:
             }
         )
 
+        self.tools.register("start_presentation", self._tool_start_presentation,
+            "CALL THIS TOOL when the user or Chairman asks you to give a speech, deliver a presentation, speak for a duration, or address a gathering "
+            "(e.g. '৫ মিনিট কথা বলো', '৩৬০ সেকেন্ড বলো', '৫ মিনিটের বক্তব্য দাও', 'ভাষণ দাও', 'বক্তব্য শুরু করো', 'talk for 5 minutes', 'give a speech on topic X', 'deliver a presentation'). "
+            "IMPORTANT: Never reply with short chat or counter-questions when asked to speak on a topic for a specified duration—immediately invoke this tool! "
+            "LUMI will deliver a structured, inspiring, continuous Bengali speech with expressive hand gestures.",
+            {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "The specific topic or theme of the speech/presentation (e.g. 'গ্রাম উন্নয়ন', 'কৃষি ও পরিবেশ', 'ডিজিটাল সেবা')."
+                    },
+                    "duration_minutes": {
+                        "type": "number",
+                        "description": "Requested duration of speech in minutes (e.g. 1.0, 3.0, 5.0). Default is 3.0."
+                    },
+                    "audience": {
+                        "type": "string",
+                        "description": "Target audience (e.g. 'উপস্থিত গ্রামবাসী', 'ইউনিয়ন পরিষদের সদস্যবৃন্দ', 'কৃষক ভাই ও বোনেরা')."
+                    },
+                    "key_points": {
+                        "type": "string",
+                        "description": "Key points, specific decisions, or special instructions to emphasize in the speech."
+                    }
+                },
+                "required": ["topic"]
+            }
+        )
+        self.tools.register("stop_presentation", self._tool_stop_presentation,
+            "CALL THIS TOOL when the user asks you to stop or halt your speech/presentation (e.g. 'বক্তব্য থামাও', 'লুমি থামো', 'stop presentation').",
+            {
+                "type": "object",
+                "properties": {}
+            }
+        )
+
         from ..ai.gemini_live import GeminiLiveClient
         from ..audio.turn_arbiter import AudioTurnArbiter
         
@@ -312,6 +348,22 @@ class LumiBrain:
         self.chess_engine = ChessAnalysisEngine()
         self.reminders = ReminderScheduler(self.memory, self.event_bus)
         self.documents = PDFReportGenerator()
+
+        from ..speech.presentation import PresentationEngine
+        self.presentation_engine = PresentationEngine(
+            tts=self.tts,
+            speaker=self.speaker,
+            gestures=self.gestures,
+            eyes=self.eyes,
+            state=self.state,
+            event_bus=self.event_bus,
+            realtime_voice=self.realtime_voice,
+            turn_arbiter=self.turn_arbiter,
+        )
+        # Wire bidirectional callbacks with Gemini Live
+        self.realtime_voice._on_silence_cancelled_cb = lambda: self.cancel_silent_mode(reason="gemini_live_wake")
+        self.realtime_voice._on_silence_activated_cb = lambda dur: self.set_silent_mode(duration_seconds=dur, reason="gemini_live_command")
+        self.realtime_voice._on_presentation_requested_cb = lambda topic, dur: self._tool_start_presentation(topic=topic, duration_minutes=dur)
         
         # Dual-Mem0 System: Use Cloud API if key exists, otherwise use Local Gemini Engine
         import os
@@ -330,6 +382,7 @@ class LumiBrain:
         self._audio_thread: Optional[threading.Thread] = None
         # Silent mode: when set, suppress all greetings, gestures, and triggered injections until this timestamp
         self._silent_until: float = 0.0
+        self._silent_mode_active: bool = False
         self._unknown_greeting_asked: bool = False
         self._last_unknown_greeting_time: float = 0.0
         self._last_speech_time: float = 0.0
@@ -401,13 +454,16 @@ class LumiBrain:
         if not t:
             return None
 
-        # Common non-name words (verbs, pronouns, adjectives) to ignore
+        # Common non-name words (verbs, pronouns, adjectives, determiners) to ignore
         stopwords = {
             "ভালো", "ভালোই", "খারাপ", "ঠিক", "আছি", "এখানে", "চাচ্ছি", "চাই", "বলছি",
             "বলতে", "জানি", "লুমি", "রোবট", "একটা", "একটু", "ঘুমাই", "খাই", "যাই", "না",
-            "তো", "মানুষ", "মালিক", "আসি", "গেছি", "শুনছি", "দেখছি", "বলবো", "করি", "করছি",
+            "তো", "মানুষ", "মালিক", "আসি", "গেছি", "শুনছি", "দেখছি", "বলবো", "বলব", "করি", "করছি",
+            "কোন", "কোনো", "কিছু", "কি", "কেন", "কোথায়", "কখন", "কিভাবে", "কাউকে", "কারো",
+            "কখনো", "মনে", "শুধু", "এখন", "আজ", "কাল", "পরশু", "সব", "সবাই", "তোমরা",
+            "আমরা", "আপনারা", "বলতেছি", "চাইনা", "চাইনি", "প্রশ্ন", "কথা", "ইতিহাস", "উত্তর", "বিষয়",
             "fine", "good", "bad", "here", "ready", "going", "doing", "speaking", "talking",
-            "robot", "lumi", "yes", "no", "ok", "okay"
+            "robot", "lumi", "yes", "no", "ok", "okay", "who", "what", "where", "when", "why"
         }
 
         # Pattern 1: 'আমার নাম <নাম>' or 'নাম হলো <নাম>'
@@ -425,9 +481,10 @@ class LumiBrain:
             if name.lower() not in stopwords and len(name) >= 2:
                 return (name, "friend")
 
-        # Pattern 3: 'আমি <নাম>' / 'ami <name>'
-        m = re.search(r"^(?:আমি|ami)\s+([A-Za-z\u0980-\u09FF]+)(?:[।!?,\s]|$)", t, re.IGNORECASE)
-        if m:
+        # Pattern 3: 'আমি <নাম>' / 'ami <name>' (Only on short intro utterances <= 4 words or followed by বলছি/হলাম)
+        word_count = len(t.split())
+        m = re.search(r"^(?:আমি|ami)\s+([A-Za-z\u0980-\u09FF]+)(?:\s+(?:বলছি|হলাম)|[।!?,\s]|$)", t, re.IGNORECASE)
+        if m and (word_count <= 4 or "বলছি" in t or "হলাম" in t):
             name = m.group(1).strip()
             if name.lower() not in stopwords and len(name) >= 2:
                 rel = "creator" if name.lower() in ["palash", "পলাশ"] else "friend"
@@ -435,7 +492,7 @@ class LumiBrain:
 
         # Pattern 4: 'my name is <name>' / 'i am <name>'
         m = re.search(r"(?:my\s+name\s+is|i\s+am|this\s+is\s+my\s+friend|this\s+is)\s+([A-Za-z]+)", t, re.IGNORECASE)
-        if m:
+        if m and (word_count <= 5 or "name is" in t.lower()):
             name = m.group(1).strip()
             if name.lower() not in stopwords and len(name) >= 2:
                 rel = "creator" if name.lower() in ["palash"] else "friend"
@@ -454,6 +511,15 @@ class LumiBrain:
         """
         import re
         t = text.lower().strip()
+        anti_silence = [
+            r"(?:থাম(?:ার|বে|লে)?|চুপ\s*(?:করা|থাকা)?)\s*(?:র\s*)?(?:প্রয়োজন\s*নাই|প্রয়োজন\s*নাই|দরকার\s*নাই|লাগবে\s*না|হবে\s*না|নিষেধ)",
+            r"(?:থাম(?:বে|িস)?\s*না|থামো\s*না|থামুন\s*না)",
+            r"(?:চুপ\s*কর(?:ো|বেন)?\s*না|চুপ\s*থাকিও\s*না)",
+            r"(?:ননস্টপ|nonstop|একটানা|লাগাতার|লগাতার)",
+        ]
+        if any(re.search(p, t) for p in anti_silence):
+            return None
+
         silence_triggers = [
             "চুপ থাকো", "চুপ থাক", "চুপ কর", "চুপ করো", "চুপ রেখো",
             "কথা বলবে না", "কথা বলো না", "কথা বলিস না", "শান্ত থাকো", "নিশ্চল থাকো",
@@ -669,6 +735,11 @@ class LumiBrain:
         last_frame_time = 0.0
         self._last_face_seen_time = time.time()
         while self._running:
+            now = time.time()
+            # 1. Active silence expiration watchdog
+            if getattr(self, "_silent_mode_active", False) and now >= getattr(self, "_silent_until", 0.0):
+                self.cancel_silent_mode(reason="duration_elapsed")
+
             if not self.camera.is_available():
                 time.sleep(1.0)
                 continue
@@ -747,8 +818,9 @@ class LumiBrain:
             num_faces = len(getattr(self, '_last_detected_faces', []))
             is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
 
-            # Continuous streaming for Gemini Live neural VAD: only gate on speaker playback (AEC)
-            should_stream = not is_speaker_active
+            # Continuous streaming for Gemini Live neural VAD: gate on speaker playback (AEC), active presentation, or silence
+            is_presenting = getattr(getattr(self, "presentation_engine", None), "is_presenting", lambda: False)()
+            should_stream = not is_speaker_active and not is_presenting
             if hasattr(self, "turn_arbiter"):
                 self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)
 
@@ -766,7 +838,7 @@ class LumiBrain:
                     self._voice_buffer.extend(chunk)
 
             # 4. Instant Local Acoustic Reflex (<150ms) on speech onset
-            if not is_speaker_active:
+            if not is_speaker_active and not self._is_silent() and not is_presenting:
                 if event in (SpeechEvent.SPEECH_START, SpeechEvent.SPEECH_CONTINUE) or energy >= ENERGY_THRESHOLD:
                     self._last_speech_time = time.time()
                 if event == SpeechEvent.SPEECH_START:
@@ -854,6 +926,38 @@ class LumiBrain:
             # If meeting mode is active, handle utterance logging silently
             if getattr(self, "meeting_manager", None) and self.meeting_manager.is_meeting_active():
                 self._process_meeting_utterance(audio_bytes, duration)
+                return
+
+            # If presentation mode is active, check specifically for emergency stop commands
+            if getattr(self, "presentation_engine", None) and self.presentation_engine.is_presenting():
+                if hasattr(self, "stt"):
+                    try:
+                        text = self.stt.transcribe_pcm_bytes(audio_bytes)
+                        if text:
+                            logger.info(f"🎤 Utterance during presentation: '{text}'")
+                            if self.presentation_engine.check_stop_command(text):
+                                logger.info(f"🛑 Presentation stop trigger matched in speech: '{text}'")
+                                self.presentation_engine.stop_presentation(reason="voice_stop_command")
+                                return
+                    except Exception as e:
+                        logger.debug(f"Presentation stop check STT error: {e}")
+                return
+
+            # If silence mode is active, check specifically for voice wake/un-mute commands
+            if self._is_silent():
+                if hasattr(self, "stt"):
+                    try:
+                        text = self.stt.transcribe_pcm_bytes(audio_bytes)
+                        if text:
+                            logger.info(f"🎤 Utterance during silence mode: '{text}'")
+                            clean = text.lower().strip()
+                            wake_triggers = ["কথা বলো", "জেগে ওঠো", "লুমি কথা বলো", "লুমি", "শুনতে পাচ্ছ", "অন হও", "wake up", "start talking"]
+                            if any(trig in clean for trig in wake_triggers):
+                                logger.info(f"Voice wake trigger detected during silence: '{text}'")
+                                self.cancel_silent_mode(reason="voice_wake_command")
+                                return
+                    except Exception as e:
+                        logger.debug(f"Silence wake check STT error: {e}")
                 return
 
             # If Anjum Mode is active, handle speech with speech-therapy companion logic
@@ -1238,11 +1342,13 @@ class LumiBrain:
             vision_conf = getattr(getattr(self, "settings", None), "vision", None)
             cooldown_val = getattr(vision_conf, "greeting_cooldown_s", 3000.0) if vision_conf else 3000.0
 
+            # If LUMI is in silent mode, skip all greeting speech, gestures, and animations
+            # Checked BEFORE should_interact so person's cooldown is NOT burned during silence!
+            if self._is_silent():
+                logger.debug(f"Silent mode active: suppressing greeting for {person.name}.")
+                return
+
             if self.face_service.should_interact(person.id, cooldown_s=cooldown_val):
-                # If LUMI is in silent mode, skip all greeting speech, gestures, and animations
-                if self._is_silent():
-                    logger.info(f"Silent mode active: suppressing greeting for {person.name}.")
-                    return
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
@@ -1746,36 +1852,35 @@ class LumiBrain:
 
     def _is_silent(self) -> bool:
         """Return True if LUMI is in a user-commanded silent period."""
+        if getattr(self, "_silent_mode_active", False):
+            if time.time() >= getattr(self, "_silent_until", 0.0):
+                self.cancel_silent_mode(reason="duration_elapsed")
+                return False
+            return True
         if hasattr(self, "turn_arbiter"):
             return self.turn_arbiter.is_silent()
         return time.time() < self._silent_until
 
-    def _tool_set_silent_mode(self, duration_seconds: Optional[float] = None, silent_until_iso: Optional[str] = None) -> str:
-        """Activate silent mode — suppress all greetings, gestures, and spontaneous speech."""
-        if hasattr(self, "state") and self.state and getattr(self.state, "current_state", None) == BehaviorState.GREETING:
-            logger.warning("Ignoring set_silent_mode tool call during autonomous GREETING.")
-            return "Cannot enter silent mode during autonomous greeting."
-
-        from datetime import datetime
+    def set_silent_mode(self, duration_seconds: float = 300.0, reason: str = "") -> str:
+        """Centralized activation of silent mode across all subsystems."""
         now = time.time()
-
-        if silent_until_iso:
-            try:
-                dt = datetime.fromisoformat(silent_until_iso)
-                self._silent_until = dt.timestamp()
-            except Exception as e:
-                logger.warning(f"set_silent_mode: bad ISO string '{silent_until_iso}': {e}")
-                self._silent_until = now + 300.0
-        elif duration_seconds and duration_seconds > 0:
-            self._silent_until = now + duration_seconds
-        else:
-            # Default: 5 minutes
-            self._silent_until = now + 300.0
+        self._silent_until = now + duration_seconds
+        self._silent_mode_active = True
 
         if hasattr(self, "turn_arbiter"):
             self.turn_arbiter.set_silent_until(self._silent_until)
 
-        # Immediately stop speech output and silence audio hardware
+        if hasattr(self, "realtime_voice") and self.realtime_voice:
+            try:
+                if hasattr(self.realtime_voice, "set_silent_until"):
+                    self.realtime_voice.set_silent_until(self._silent_until)
+            except Exception as e:
+                logger.debug(f'Silent mode realtime voice error: {e}')
+
+        # Immediately halt ongoing speech and presentation if active
+        if getattr(self, "presentation_engine", None) and self.presentation_engine.is_presenting():
+            self.presentation_engine.stop_presentation(reason="silent_mode_activated")
+
         if hasattr(self, "speaker") and self.speaker:
             try:
                 self.speaker.stop_stream()
@@ -1791,16 +1896,112 @@ class LumiBrain:
                 self.gestures.stop()
             except Exception as e:
                 logger.debug(f'Silent mode gesture stop error: {e}')
-        if hasattr(self, "realtime_voice") and self.realtime_voice:
-            try:
-                if hasattr(self.realtime_voice, "set_silent_until"):
-                    self.realtime_voice.set_silent_until(self._silent_until)
-            except Exception as e:
-                logger.debug(f'Silent mode realtime voice error: {e}')
 
         remaining = max(0, self._silent_until - now)
-        logger.info(f"Silent mode activated for {remaining:.0f}s (until {self._silent_until}).")
+        logger.info(f"Silent mode activated for {remaining:.0f}s (until {self._silent_until}). Reason: {reason or 'user_command'}")
         return f"silent_mode_active_for:{remaining:.0f}s"
+
+    def cancel_silent_mode(self, reason: str = "") -> None:
+        """Deactivate silent mode across all subsystems and restore active robot state."""
+        if not getattr(self, "_silent_mode_active", False) and self._silent_until == 0.0:
+            return
+
+        logger.info(f"Deactivating silent mode. Reason: {reason or 'manual_cancel'}")
+        self._silent_until = 0.0
+        self._silent_mode_active = False
+
+        if hasattr(self, "turn_arbiter"):
+            self.turn_arbiter.cancel_silence()
+
+        if hasattr(self, "realtime_voice") and self.realtime_voice:
+            try:
+                if hasattr(self.realtime_voice, "cancel_silence"):
+                    self.realtime_voice.cancel_silence()
+                elif hasattr(self.realtime_voice, "set_silent_until"):
+                    self.realtime_voice.set_silent_until(0.0)
+            except Exception as e:
+                logger.debug(f"Silent mode realtime voice cancel error: {e}")
+
+        # Restore eyes to neutral
+        if hasattr(self, "eyes") and self.eyes:
+            try:
+                self.eyes.set_expression("neutral")
+            except Exception as e:
+                logger.debug(f"Eyes restore error: {e}")
+
+        # Transition state back to IDLE
+        if hasattr(self, "state") and self.state:
+            try:
+                self.state.transition_to(BehaviorState.IDLE, reason=f"silence_ended_{reason}")
+            except Exception as e:
+                logger.debug(f"State transition error: {e}")
+
+        # Reset greeting cooldowns so Chairman or recognized person is immediately acknowledged
+        if hasattr(self, "face_service") and hasattr(self.face_service, "reset_interaction_cooldown"):
+            self.face_service.reset_interaction_cooldown()
+
+        # If silence elapsed automatically or was un-muted by voice, provide polite confirmation
+        if reason in ("duration_elapsed", "voice_wake_command"):
+            confirm_text = "আমি সক্রিয় হয়েছি।"
+            if hasattr(self, "tts") and hasattr(self, "speaker") and self.tts and self.speaker:
+                try:
+                    audio_path = self.tts.synthesize(confirm_text)
+                    if audio_path:
+                        self.speaker.play_file(audio_path, block=False)
+                except Exception as e:
+                    logger.debug(f"Wake announcement error: {e}")
+
+            if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "wake_up"):
+                self.realtime_voice.wake_up(15.0)
+
+    def _tool_set_silent_mode(self, duration_seconds: Optional[float] = None, silent_until_iso: Optional[str] = None) -> str:
+        """Activate silent mode — suppress all greetings, gestures, and spontaneous speech."""
+        if hasattr(self, "state") and self.state and getattr(self.state, "current_state", None) == BehaviorState.GREETING:
+            logger.warning("Ignoring set_silent_mode tool call during autonomous GREETING.")
+            return "Cannot enter silent mode during autonomous greeting."
+
+        from datetime import datetime
+        now = time.time()
+
+        if silent_until_iso:
+            try:
+                dt = datetime.fromisoformat(silent_until_iso)
+                dur = max(dt.timestamp() - now, 30.0)
+            except Exception as e:
+                logger.warning(f"set_silent_mode: bad ISO string '{silent_until_iso}': {e}")
+                dur = 300.0
+        elif duration_seconds and duration_seconds > 0:
+            dur = duration_seconds
+        else:
+            # Default: 5 minutes
+            dur = 300.0
+
+        return self.set_silent_mode(duration_seconds=dur, reason="tool_call")
+
+    def _tool_start_presentation(
+        self,
+        topic: str,
+        duration_minutes: float = 3.0,
+        audience: str = "উপস্থিত সুধীবৃন্দ",
+        key_points: str = "",
+    ) -> str:
+        """Deliver a structured, continuous Bengali speech."""
+        if self._is_silent():
+            return "বর্তমানে নীরব মোড (Silent Mode) সক্রিয় রয়েছে। বক্তব্য প্রদান করার জন্য পূর্বে নীরব মোড বন্ধ করতে হবে।"
+        if not getattr(self, "presentation_engine", None):
+            return "Presentation engine not available."
+        return self.presentation_engine.start_presentation(
+            topic=topic,
+            duration_minutes=duration_minutes,
+            audience=audience,
+            key_points=key_points,
+        )
+
+    def _tool_stop_presentation(self) -> str:
+        """Halt ongoing speech presentation."""
+        if not getattr(self, "presentation_engine", None):
+            return "Presentation engine not available."
+        return self.presentation_engine.stop_presentation(reason="tool_call")
 
     def _tool_adapt_behavior(self, user_feedback: str, adapted_rule: str, category: str = "general") -> str:
         """Analyze, store, and dynamically adapt to behavioral instructions and advice from the user."""

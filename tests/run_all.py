@@ -26,12 +26,25 @@ import tests.test_phase2_audio_session as tp2
 import tests.test_phase3_vision_perception as tp3
 import tests.test_phase4_architecture_fsm as tp4
 import tests.test_phase5_lifelike_behavior as tp5
+import tests.test_silence_and_presentation as tsp
 
 
 class DummyMonkeypatch:
     def setenv(self, key, value):
         import os
         os.environ[key] = value
+
+
+def make_case_runner(tc_cls, method_name):
+    def _runner():
+        case = tc_cls(method_name)
+        case.setUp()
+        try:
+            getattr(case, method_name)()
+        finally:
+            if hasattr(case, "tearDown"):
+                case.tearDown()
+    return _runner
 
 
 def run_test(name, fn, *args):
@@ -167,6 +180,25 @@ def main():
         ("test_continuous_affective_eyes_modulation", tp5.test_continuous_affective_eyes_modulation, ()),
         ("test_instant_local_acoustic_reflex", tp5.test_instant_local_acoustic_reflex, ()),
         ("test_anjum_closed_loop_adaptive_therapy", tp5.test_anjum_closed_loop_adaptive_therapy, ()),
+        # Silence Mode & Presentation Mode
+        ("test_presentation_fsm_valid_transitions", make_case_runner(tsp.TestSilenceAndPresentation, "test_presentation_fsm_valid_transitions"), ()),
+        ("test_presentation_engine_stop_command_patterns", make_case_runner(tsp.TestSilenceAndPresentation, "test_presentation_engine_stop_command_patterns"), ()),
+        ("test_presentation_engine_script_generator", make_case_runner(tsp.TestSilenceAndPresentation, "test_presentation_engine_script_generator"), ()),
+        ("test_presentation_engine_lifecycle_and_stop", make_case_runner(tsp.TestSilenceAndPresentation, "test_presentation_engine_lifecycle_and_stop"), ()),
+        ("test_face_service_reset_interaction_cooldown", make_case_runner(tsp.TestSilenceAndPresentation, "test_face_service_reset_interaction_cooldown"), ()),
+        ("test_silence_mode_auto_expiration", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_silence_mode_auto_expiration"), ()),
+        ("test_silence_does_not_burn_face_greeting_cooldown", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_silence_does_not_burn_face_greeting_cooldown"), ()),
+        ("test_presentation_blocked_during_silence", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_presentation_blocked_during_silence"), ()),
+        ("test_silence_halts_ongoing_presentation", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_silence_halts_ongoing_presentation"), ()),
+        ("test_presentation_5_minute_script_word_count", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_presentation_5_minute_script_word_count"), ()),
+        ("test_presentation_seconds_and_phrasing_parsing", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_presentation_seconds_and_phrasing_parsing"), ()),
+        ("test_turn_arbiter_presenting_guard", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_turn_arbiter_presenting_guard"), ()),
+        ("test_anti_silence_negation_guards", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_anti_silence_negation_guards"), ()),
+        ("test_observing_to_speaking_and_presenting_transitions", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_observing_to_speaking_and_presenting_transitions"), ()),
+        ("test_conversational_intro_name_filtering", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_conversational_intro_name_filtering"), ()),
+        ("test_gemini_3_8_live_extended_thinking_setup", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_gemini_3_8_live_extended_thinking_setup"), ()),
+        ("test_prompt_rules_mandate_speech_monologue_and_forbid_checkins", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_prompt_rules_mandate_speech_monologue_and_forbid_checkins"), ()),
+        ("test_continuous_speech_session_tracking_and_prompt_continuation", make_case_runner(tsp.TestLumiBrainSilenceAndPresentation, "test_continuous_speech_session_tracking_and_prompt_continuation"), ()),
     ]
 
     for name, fn, args in tests_to_run:

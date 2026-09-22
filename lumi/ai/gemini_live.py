@@ -56,7 +56,8 @@ class GeminiLiveClient:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.turn_arbiter = turn_arbiter
         
-        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.1-flash-live-preview")
+        # Default to Gemini 3.8 Live API (supports models/gemini-3.8-live and models/gemini-3.8-live-extended-thinking)
+        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.8-live")
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -81,6 +82,9 @@ class GeminiLiveClient:
         self._last_video_send = 0.0
         self._last_speech_motion_time = 0.0
         self._silent_until = 0.0
+        self._active_speech_target_end = 0.0
+        self._active_speech_topic = ""
+        self._speech_continuation_count = 0
 
     def wake_up(self, duration_s: Optional[float] = None) -> None:
         """Open the active conversation window for Live bidirectional audio streaming."""
@@ -135,6 +139,12 @@ class GeminiLiveClient:
             except Exception as e:
                 logger.debug(f'Silent mode speaker stop error: {e}')
 
+    def cancel_silence(self) -> None:
+        """Cancel silence mode immediately."""
+        self._silent_until = 0.0
+        if getattr(self, "turn_arbiter", None):
+            self.turn_arbiter.cancel_silence()
+
     def is_silent(self) -> bool:
         """Return True if robot is currently silenced by user command."""
         return time.time() < getattr(self, "_silent_until", 0.0)
@@ -152,20 +162,37 @@ class GeminiLiveClient:
     def _check_silence_command(self, text: str) -> bool:
         """Detect silence commands (e.g. 'চুপ থাকো', '১০ মিনিট চুপ থাকো', 'shut up') or wake commands."""
         import re
+        if not text:
+            return False
         lower = text.lower()
 
         # Wake command: "কথা বলো", "জেগে ওঠো", "wake up"
         if re.search(r"(?:কথা বল(?:ো|িস|েন)?|জেগে ওঠো|শুনতে পাচ্ছ|wake up)", lower):
             if self.is_silent():
                 logger.info("Wake command detected. Deactivating silent mode.")
-                self._silent_until = 0.0
-                if self.eyes and hasattr(self.eyes, "set_expression"):
+                self.cancel_silence()
+                if getattr(self, "eyes", None) and hasattr(self.eyes, "set_expression"):
                     self.eyes.set_expression("happy")
+                if getattr(self, "_on_silence_cancelled_cb", None) and callable(self._on_silence_cancelled_cb):
+                    try:
+                        self._on_silence_cancelled_cb()
+                    except Exception as e:
+                        logger.debug(f"Silence cancel cb error: {e}")
                 return True
 
+        # Check negation / anti-silence (e.g. "থামার প্রয়োজন নাই", "থামবে না", "ননস্টপ")
+        anti_silence = [
+            r"(?:থাম(?:ার|বে|লে)?|চুপ\s*(?:করা|থাকা)?)\s*(?:র\s*)?(?:প্রয়োজন\s*নাই|প্রয়োজন\s*নাই|দরকার\s*নাই|লাগবে\s*না|হবে\s*না|নিষেধ)",
+            r"(?:থাম(?:বে|িস)?\s*না|থামো\s*না|থামুন\s*না)",
+            r"(?:চুপ\s*কর(?:ো|বেন)?\s*না|চুপ\s*থাকিও\s*না)",
+            r"(?:ননস্টপ|nonstop|একটানা|লাগাতার|লগাতার)",
+        ]
+        if any(re.search(p, lower) for p in anti_silence):
+            return False
+
         # Silence command: "চুপ থাকো", "১০ মিনিট চুপ থাকো", "কথা বলিও না", "shut up", "be quiet"
-        has_silence_word = any(w in lower for w in ["চুপ", "থাম", "কথা বল", "shut up", "be quiet", "silence", "quiet"])
-        if has_silence_word and re.search(r"(?:চুপ থাক|চুপ কর|থাম|কথা বল(?:ো|িস|েন)?\s*না|shut up|be quiet)", lower):
+        has_silence_word = any(w in lower for w in ["চুপ", "থাম", "shut up", "be quiet", "silence", "quiet"])
+        if has_silence_word and re.search(r"(?:^|\s+)(?:চুপ\s*(?:থাকো?|থাকুন|করো?|করুন)|থামো|থামুন|থেমে\s*(?:যাও|যান)|shut\s*up|be\s*quiet|stop)(?:\s+|$|[।!?])", lower):
             duration_minutes = 5.0
             num_match = re.search(r"(\d+)\s*(?:মিনিট|min)", lower)
             if num_match:
@@ -182,16 +209,197 @@ class GeminiLiveClient:
 
             duration_s = max(duration_minutes * 60.0, 30.0)
             self._silent_until = time.time() + duration_s
+            self._active_speech_target_end = 0.0
+            self._active_speech_topic = ""
+            if getattr(self, "turn_arbiter", None):
+                self.turn_arbiter.set_presenting(False)
             logger.info(f"Silence command matched from user speech! Silencing LUMI for {duration_s:.0f}s.")
-            if self.speaker:
+            if getattr(self, "speaker", None):
                 try:
                     self.speaker.stop_stream()
                 except Exception as e:
                     logger.debug(f'Silent mode speaker stop error: {e}')
-            if self.eyes and hasattr(self.eyes, "set_expression"):
+            if getattr(self, "eyes", None) and hasattr(self.eyes, "set_expression"):
                 self.eyes.set_expression("sleep")
+            if getattr(self, "_on_silence_activated_cb", None) and callable(self._on_silence_activated_cb):
+                try:
+                    self._on_silence_activated_cb(duration_s)
+                except Exception as e:
+                    logger.debug(f"Silence activated cb error: {e}")
             return True
         return False
+
+    def _check_presentation_command(self, text: str) -> bool:
+        """Detect speech/presentation requests (e.g. '৫ মিনিট কথা বলো', '৩৬০ সেকেন্ড বলো', 'ভাষণ দাও', 'give a speech')."""
+        import re
+        if not text:
+            return False
+
+        lower = text.lower()
+        # Exclude actual silences, cancellations, reminders
+        if any(w in lower for w in ["মনে করিয়ে", "রিমাইন্ডার", "alarm", "remind"]):
+            return False
+        if self._check_silence_command(text):
+            return False
+
+        norm = text
+        bn_digits = "০১২৩৪৫৬৭৮৯"
+        en_digits = "0123456789"
+        dev_digits = "०१२३४५६७८९"
+        for b, e in zip(bn_digits, en_digits):
+            norm = norm.replace(b, e)
+        for d, e in zip(dev_digits, en_digits):
+            norm = norm.replace(d, e)
+        norm_lower = norm.lower()
+
+        # Match seconds and minutes
+        sec_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:সেকেন্ড(?:ের|ে)?|सेकंड|sec(?:ond)?s?)", norm_lower)
+        min_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:মিনিট(?:ের|ে)?|मिनट|min(?:ute)?s?)", norm_lower)
+
+        duration = None
+        if sec_match:
+            duration = max(0.5, float(sec_match.group(1)) / 60.0)
+        elif min_match:
+            duration = max(0.5, float(min_match.group(1)))
+        elif any(w in norm_lower for w in ["পাঁচ মিনিট", "পাচ মিনিট", "pach minute", "panch minute", "five minute", "5 min", "पांच मिनट"]):
+            duration = 5.0
+        elif any(w in norm_lower for w in ["দশ মিনিট", "dosh minute", "ten minute", "10 min", "दस मिनट"]):
+            duration = 10.0
+        elif any(w in norm_lower for w in ["তিন মিনিট", "tin minute", "three minute", "3 min", "तीन मिनट"]):
+            duration = 3.0
+        elif any(w in norm_lower for w in ["দুই মিনিট", "dui minute", "two minute", "2 min", "दो मिनट"]):
+            duration = 2.0
+        elif any(w in norm_lower for w in ["এক মিনিট", "ek minute", "one minute", "1 min", "एक मिनट"]):
+            duration = 1.0
+
+        speech_verbs = [
+            "বক্তব্য", "ভাষণ", "বক্তৃতা", "উপস্থাপন", "লেকচার", "আলোচনা",
+            "কথা বল", "কথা বলো", "কথা বলুন", "কথা বলবি", "কথা বলতে", "কথা বলবো", "কথা বলব", "কথা বলবা",
+            "বলো", "বলুন", "বলব", "বলবো", "কিছু বল", "কিছু বলো", "একটানা বল", "একটানা বলো",
+            "ননস্টপ", "nonstop", "লাগাতার", "লগাতার",
+            "बात करें", "बात करो", "लगातार",
+            "katha bolo", "kotha bolo", "katha bol", "kotha bol", "katha bolun", "kotha bolun",
+            "katha bolte", "kotha bolte", "kotha", "katha", "bolo", "bolun", "kichu bolo",
+            "boktobbo", "bhashon", "vashon",
+            "speech", "presentation", "lecture", "talk", "speak"
+        ]
+        has_speech_intent = any(w in norm_lower for w in speech_verbs)
+
+        speech_nouns = ["বক্তব্য", "ভাষণ", "বক্তৃতা", "উপস্থাপন", "speech", "presentation", "lecture", "boktobbo", "bhashon"]
+        action_words = ["দাও", "দিন", "শুরু", "বল", "কর", "give", "deliver", "start"]
+        has_speech_word = any(w in norm_lower for w in speech_nouns)
+        has_action_word = any(w in norm_lower for w in action_words)
+
+        is_presentation = False
+        if duration is not None and has_speech_intent:
+            is_presentation = True
+        elif has_speech_word and has_action_word:
+            is_presentation = True
+            duration = 3.0
+
+        if not is_presentation or duration is None:
+            return False
+
+        # Smart Topic Extraction
+        # 1. Look for targeted clauses preceding postpositions ('নিয়ে', 'সম্পর্কে', 'বিষয়ে', 'niye', 'somporke')
+        clause_pattern = r"([^,।\.\?\!\:\;]+?)\s*(?:নিয়ে|নিয়ে|সম্পর্কে|সম্বন্ধে|বিষয়ে|বিষয়ক|এর\s*ওপর|niye|somporke)(?:\s+|$)"
+        matches = re.findall(clause_pattern, norm, flags=re.IGNORECASE)
+        cleaned_clauses = []
+        for m in matches:
+            cand = m.strip()
+            for _ in range(2):
+                cand = re.sub(r"(\d+|পাঁচ|দশ|তিন|দুই|এক)\s*(?:মিনিট(?:ের|ে)?|সেকেন্ড(?:ের|ে)?|min(?:ute)?s?|sec(?:ond)?s?|सेकंड|मिनट)", "", cand, flags=re.IGNORECASE)
+                cand = re.sub(r"(?:^|\s+)(?:হামে|আমি|তুমি|লুমি|রোবট|বলতেছি|বলছি|বলবো|বলব|জানতে\s*চাই\s*না|জানতে\s*চাই|যান্তে\s*চাই\s*না|যান্তে\s*চাই|তোমাকে|দয়া\s*করে|প্লিজ|একটি|একটা|শুধু|কোন|কোনো|প্রশ্ন|করবো|করব|না|বাত|लगातार|नॉनस्टॉप)(?:\s+|$)", " ", cand, flags=re.IGNORECASE)
+                cand = re.sub(r"\s+", " ", cand).strip()
+            if len(cand) > 2 and cand not in cleaned_clauses:
+                cleaned_clauses.append(cand)
+
+        if cleaned_clauses:
+            topic = " ও ".join(cleaned_clauses)
+        else:
+            cleaned = norm
+            cleaned = re.sub(r"\(\s*\d+(?:\.\d+)?\s*(?:মিনিট(?:ের|ে)?|সেকেন্ড(?:ের|ে)?|min(?:ute)?s?|sec(?:ond)?s?|सेकंड|मिनट)\s*\)", " ", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"\d+(?:\.\d+)?\s*(?:মিনিট(?:ের|ে)?|সেকেন্ড(?:ের|ে)?|min(?:ute)?s?|sec(?:ond)?s?|सेकंड|मिनट)", " ", cleaned, flags=re.IGNORECASE)
+            cleaned = re.sub(r"(?:পাঁচ|দশ|তিন|দুই|এক)\s*(?:মিনিট(?:ের|ে)?|সেকেন্ড(?:ের|ে)?|सेकंड|मिनट)", " ", cleaned, flags=re.IGNORECASE)
+
+            noise_patterns = [
+                r"কথা\s*বল(?:তে\s*বলা\s*হয়|তে|বে|ব|বেন|ছেন|বো|বা)?",
+                r"কথা\s*বলো", r"কথা\s*বলুন", r"কথা\s*বল",
+                r"katha\s*bolo", r"kotha\s*bolo", r"katha\s*bol", r"kotha\s*bol",
+                r"কিছু\s*বলো", r"কিছু\s*বলুন", r"কিছু\s*বল",
+                r"একটানা\s*বলো", r"একটানা\s*বলুন", r"একটানা\s*বল", r"একটানা",
+                r"ননস্টপ", r"nonstop", r"লাগাতার", r"লগাতার",
+                r"बात\s*करें", r"बात\s*करो", r"लगातार", r"तक", r"তাক", r"পর্যন্ত",
+                r"বক্তব্য\s*(?:দাও|দিন|শুরু\s*করো|শুরু\s*করুন|দিতে\s*হবে|রাখো)?",
+                r"ভাষণ\s*(?:দাও|দিন|শুরু\s*করো|শুরু\s*করুন|দিতে\s*হবে)?",
+                r"বক্তৃতা\s*(?:দাও|দিন|শুরু\s*করো|শুরু\s*করুন|দিতে\s*হবে)?",
+                r"উপস্থাপন\s*(?:করো|করুন|করা\s*হোক)?",
+                r"লেকচার\s*(?:দাও|দিন)?",
+                r"রোবট(?:টাকে|কে|টি)?",
+                r"দয়া\s*করে", r"একটু", r"প্লিজ", r"দিতে\s*হবে", r"শুরু\s*করো", r"শুরু\s*করুন",
+                r"তুমি", r"লুমি", r"একটি", r"একটা", r"কোনো", r"কোন", r"বিষয়ে", r"বিষয়ক",
+                r"সম্পর্কে", r"সম্বন্ধে", r"নিয়ে", r"নিয়ে", r"ওপর",
+                r"হামে\s*যান্তে\s*চাই\s*না", r"হামে\s*যান্তে\s*চাই", r"হামে\s*বলতেছি",
+                r"যান্তে\s*চাই\s*না", r"জানতে\s*চাই\s*না", r"যান্তে\s*চাই", r"জানতে\s*চাই",
+                r"পারো\s*কিনা\s*দেখি", r"পারি\s*কিনা", r"দেখি",
+                r"বলো", r"বলুন", r"বল", r"বলবো", r"বলব", r"দাও", r"দিন", r"bolo", r"kotha", r"katha",
+                r"give\s*a\s*speech(?:\s*on)?", r"deliver\s*a\s*presentation(?:\s*on)?",
+                r"give\s*a\s*presentation(?:\s*on)?", r"give\s*a\s*lecture(?:\s*on)?",
+                r"talk\s*about", r"speak\s*about", r"presentation\s*on",
+                r"speech\s*on", r"talk\s*for", r"speak\s*for", r"presentation", r"speech",
+                r"about", r"on", r"for"
+            ]
+            for np in noise_patterns:
+                cleaned = re.sub(np, " ", cleaned, flags=re.IGNORECASE)
+
+            cleaned = re.sub(r"[\(\)\[\]\{\}\-\_\,\.\?\!\'\"\:।]", " ", cleaned)
+            cleaned = re.sub(r"^\s*[\u09be-\u09cd]+\s*", "", cleaned)
+            cleaned = re.sub(r"\s+[\u09be-\u09cd]+(?:\s+|$)", " ", cleaned)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+            if len(cleaned) > 2:
+                topic = cleaned
+            elif any(w in lower for w in ["স্বাধীনতা", "মুক্তিযুদ্ধ", "স্বাধীনতার"]):
+                topic = "বাংলাদেশের স্বাধীনতা সংগ্রাম ও মুক্তিযুদ্ধের ইতিহাস"
+            elif any(w in lower for w in ["ইতিহাস"]):
+                topic = "ইতিহাস ও ঐতিহ্য"
+            else:
+                topic = "বিজ্ঞান ও আধুনিক প্রযুক্তি"
+
+        duration_s = duration * 60.0
+        self._active_speech_target_end = time.time() + duration_s
+        self._active_speech_topic = topic
+        self._speech_continuation_count = 0
+        logger.info(f"Speech/Presentation session initiated: '{topic}' for {duration:.1f} mins ({duration_s:.0f}s).")
+
+        # Engage presenting guard on turn arbiter so mic audio doesn't self-interrupt
+        if getattr(self, "turn_arbiter", None):
+            self.turn_arbiter.set_presenting(True)
+            self.turn_arbiter.wake_up(duration_s + 30.0)
+
+        # Transition state
+        if getattr(self, "state", None) and hasattr(self.state, "transition_to"):
+            self.state.transition_to(BehaviorState.SPEAKING, reason=f"speech:{topic[:15]}")
+
+        # Inject commanding prompt into active Gemini Live session
+        speech_cmd = (
+            f"[MANDATORY CONTINUOUS SPEECH DIRECTIVE: {duration:.1f}-MINUTE SPEECH ON '{topic}']:\n"
+            f"Deliver an uninterrupted, comprehensive monologue directly in your voice for the full {duration:.1f} minutes (~{int(duration*120)} words). "
+            f"Do NOT stop after 1 minute! NEVER ask 'আমি কি বলতেই থাকবো?', 'আমি কি আরো বলব?', or any check-in questions! "
+            f"Speak continuously with deep analysis, historical background, real-world examples, and inspiring vision."
+        )
+        if hasattr(self, "inject_context") and callable(self.inject_context):
+            try:
+                self.inject_context(speech_cmd, trigger_response=True)
+            except Exception as e:
+                logger.debug(f"Speech context injection notice: {e}")
+
+        if hasattr(self, "_on_presentation_requested_cb") and callable(self._on_presentation_requested_cb):
+            try:
+                self._on_presentation_requested_cb(topic, duration)
+            except Exception as e:
+                logger.debug(f"Presentation request cb error: {e}")
+        return True
 
     def _check_eager_recall(self, text: str) -> None:
         """Eagerly inject relevant memories during speech transcription before Gemini finishes."""
@@ -387,20 +595,42 @@ class GeminiLiveClient:
                         )
         except Exception as e:
             logger.debug(f"Could not append recent conversation history to setup prompt: {e}")
-        
+
+        instructions += (
+            "\n\n[MANDATORY DIRECTIVE: CONTINUOUS MONOLOGUES & 5-MINUTE SPEECHES]:\n"
+            "When the user asks you to talk, speak, or lecture for a duration (e.g. '৫ মিনিট কথা বলো', '৩৬০ সেকেন্ড বলো', 'talk for 5 minutes', 'ভাষণ দাও', or any time-bounded topic request):\n"
+            "1. You MUST deliver a continuous, deep, articulate, multi-paragraph monologue directly in your voice!\n"
+            "2. DO NOT stop after 1 minute! Keep speaking continuously.\n"
+            "3. NEVER ask 'আমি কি বলতেই থাকবো?', 'আমি কি আরো বলবো?', 'Do you want me to keep going?', or any check-in/counter questions. Such questions are STRICTLY FORBIDDEN!\n"
+            "4. The 1-3 sentence brevity rule is COMPLETELY SUSPENDED for speeches. Deliver a comprehensive address covering:\n"
+            "   (a) Subject introduction, context, and philosophical importance,\n"
+            "   (b) Historical background and key turning points,\n"
+            "   (c) Deep dive into core events, sacrifices, and details,\n"
+            "   (d) Present-day relevance, lessons, and impacts on society,\n"
+            "   (e) Future vision and inspiring call-to-action.\n"
+            "Speak continuously with natural cadence, authority, and emotional depth without pausing for user confirmation until the full duration has elapsed."
+        )
+
+        generation_config: Dict[str, Any] = {
+            "responseModalities": ["AUDIO"],
+            "speechConfig": {
+                "voiceConfig": {
+                    "prebuiltVoiceConfig": {
+                        "voiceName": "Kore"
+                    }
+                }
+            }
+        }
+        is_extended_thinking = "extended-thinking" in self.model.lower()
+        if is_extended_thinking:
+            thinking_level = os.getenv("GEMINI_LIVE_THINKING_LEVEL", "medium").lower()
+            generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
+            logger.info(f"Gemini 3.8 Live Extended Thinking enabled (Level: '{thinking_level}').")
+
         setup_msg: Dict[str, Any] = {
             "setup": {
                 "model": self.model,
-                "generationConfig": {
-                    "responseModalities": ["AUDIO"],
-                    "speechConfig": {
-                        "voiceConfig": {
-                            "prebuiltVoiceConfig": {
-                                "voiceName": "Kore"
-                            }
-                        }
-                    }
-                },
+                "generationConfig": generation_config,
                 "inputAudioTranscription": {},
                 "outputAudioTranscription": {},
                 "systemInstruction": {
@@ -413,11 +643,14 @@ class GeminiLiveClient:
             gemini_tools = []
             for s in self.tools.schemas.values():
                 params = s.get("parameters", {"type": "OBJECT", "properties": {}})
-                gemini_tools.append({
+                tool_decl: Dict[str, Any] = {
                     "name": s["name"],
                     "description": s["description"],
                     "parameters": self._normalize_gemini_schema(params)
-                })
+                }
+                if is_extended_thinking:
+                    tool_decl["behavior"] = "NON_BLOCKING"
+                gemini_tools.append(tool_decl)
             if gemini_tools:
                 setup_msg["setup"]["tools"] = [{"functionDeclarations": gemini_tools}]
             
@@ -466,6 +699,10 @@ class GeminiLiveClient:
         if time.time() < getattr(self, "_speaker_active_until", 0):
             return
 
+        # Drop mic audio if LUMI is currently delivering a presentation / speech
+        if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
+            return
+
         if not self.is_awake():
             return
             
@@ -494,6 +731,15 @@ class GeminiLiveClient:
                         logger.info("Proactive session rotation triggered (12m limit). Rotating WebSocket...")
                         self._rotation_requested = True
                         break
+
+                if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
+                    try:
+                        while not self._audio_queue.empty():
+                            self._audio_queue.get_nowait()
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.05)
+                    continue
 
                 try:
                     chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=0.1)
@@ -574,13 +820,21 @@ class GeminiLiveClient:
 
                     # Debug log incoming Gemini payload structure
                     if "serverContent" in data:
+                        server_content = data["serverContent"]
+                        interact_status = server_content.get("interactionStatus") or server_content.get("interaction_status")
+                        if interact_status:
+                            logger.debug(f"[Gemini 3.8 Live] Interaction Status: {interact_status}")
+
                         # Print transcriptions if available
-                        if "modelTurn" in data["serverContent"]:
-                            model_turn = data["serverContent"].get("modelTurn", {})
+                        if "modelTurn" in server_content:
+                            model_turn = server_content.get("modelTurn", {})
                             for part in model_turn.get("parts", []):
                                 if "inlineData" in part:
                                     if self.is_silent():
                                         logger.debug("Suppressing Gemini Live audio output: silent mode active.")
+                                        continue
+                                    if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
+                                        logger.debug("Suppressing Gemini Live audio output: presentation mode active.")
                                         continue
                                     turn_had_audio = True
                                     audio_bytes = base64.b64decode(part["inlineData"]["data"])
@@ -659,6 +913,7 @@ class GeminiLiveClient:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
                                 self._check_silence_command(txt)
+                                self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
                         if "outputAudioTranscription" in content:
                             txt = _get_text(content['outputAudioTranscription'])
@@ -666,6 +921,14 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
+                                if getattr(self, "_active_speech_target_end", 0.0) > time.time():
+                                    import re
+                                    if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
+                                        logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
+                                        self.inject_context(
+                                            f"[DO NOT ASK PERMISSION]: Continue speaking on '{self._active_speech_topic}' continuously. Do not ask check-in questions!",
+                                            trigger_response=True
+                                        )
                         if "inputTranscription" in content:
                             txt = _get_text(content['inputTranscription'])
                             print(f"🗣️  [USER]: {txt}")
@@ -673,6 +936,7 @@ class GeminiLiveClient:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
                                 self._check_silence_command(txt)
+                                self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
                         if "outputTranscription" in content:
                             txt = _get_text(content['outputTranscription'])
@@ -680,6 +944,14 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
+                                if getattr(self, "_active_speech_target_end", 0.0) > time.time():
+                                    import re
+                                    if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
+                                        logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
+                                        self.inject_context(
+                                            f"[DO NOT ASK PERMISSION]: Continue speaking on '{self._active_speech_topic}' continuously. Do not ask check-in questions!",
+                                            trigger_response=True
+                                        )
 
                         # End of turn detection
                         if content.get("turnComplete"):
@@ -688,16 +960,48 @@ class GeminiLiveClient:
                             if u_text or l_text:
                                 self.event_bus.emit("conversation.turn_complete", data={"user": u_text, "lumi": l_text})
 
+                            # Check presentation command on the full turn transcription
+                            if u_text and getattr(self.state, "current_state", None) != BehaviorState.PRESENTING:
+                                self._check_presentation_command(u_text)
+
+                            # Active Continuous Speech Session Tracker
+                            now = time.time()
+                            is_active_speech = getattr(self, "_active_speech_target_end", 0.0) > (now + 15.0)
+                            if is_active_speech and not self.is_silent():
+                                rem_sec = int(self._active_speech_target_end - now)
+                                self._speech_continuation_count = getattr(self, "_speech_continuation_count", 0) + 1
+                                logger.info(
+                                    f"[SPEECH SESSION] Continuing speech on '{self._active_speech_topic}': "
+                                    f"{rem_sec}s remaining (Pass {self._speech_continuation_count})."
+                                )
+                                cont_prompt = (
+                                    f"[CONTINUOUS SPEECH SESSION: {rem_sec} SECONDS REMAINING]:\n"
+                                    f"Continue your spoken monologue on '{self._active_speech_topic}' immediately! "
+                                    f"Do not stop and NEVER ask 'আমি কি বলতেই থাকবো?' or any check-in questions. "
+                                    f"Seamlessly transition into the next chapter: present-day impact, real-world examples, future vision, and inspiring concluding thoughts. "
+                                    f"Speak continuously with rich, eloquent Bengali sentences without waiting for the user!"
+                                )
+                                self.inject_context(cont_prompt, trigger_response=True)
+                            elif getattr(self, "_active_speech_target_end", 0.0) > 0.0 and getattr(self, "_active_speech_target_end", 0.0) <= (now + 15.0):
+                                logger.info(f"[SPEECH SESSION] Speech on '{self._active_speech_topic}' completed full duration.")
+                                self._active_speech_target_end = 0.0
+                                self._active_speech_topic = ""
+                                if getattr(self, "turn_arbiter", None):
+                                    self.turn_arbiter.set_presenting(False)
+
                             # Dual-safety net: If Gemini generated text but no audio streamed,
                             # synthesize via BanglaTTS and play so the robot is NEVER mute!
                             if l_text and not turn_had_audio and not self.is_silent():
-                                logger.info(f"Gemini Live returned text without audio stream. Running fallback TTS for: '{l_text[:40]}...'")
-                                try:
-                                    tts_file = self.tts.synthesize(l_text)
-                                    if tts_file and hasattr(self.speaker, "play_file"):
-                                        self.speaker.play_file(tts_file, block=False)
-                                except Exception as e:
-                                    logger.warning(f"Fallback TTS synthesis error: {e}")
+                                if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
+                                    logger.debug("Suppressing Gemini Live fallback TTS: presentation mode active.")
+                                else:
+                                    logger.info(f"Gemini Live returned text without audio stream. Running fallback TTS for: '{l_text[:40]}...'")
+                                    try:
+                                        tts_file = self.tts.synthesize(l_text)
+                                        if tts_file and hasattr(self.speaker, "play_file"):
+                                            self.speaker.play_file(tts_file, block=False)
+                                    except Exception as e:
+                                        logger.warning(f"Fallback TTS synthesis error: {e}")
 
                             turn_had_audio = False
                             user_buffer.clear()
@@ -706,16 +1010,18 @@ class GeminiLiveClient:
                             if getattr(self, "turn_arbiter", None):
                                 self.turn_arbiter.notify_speaker_stopped()
 
-                            # Transition state back to LISTENING if awake, else IDLE
+                            # Transition state back to LISTENING if awake (only if not delivering presentation/speech), else IDLE
                             if self.state and hasattr(self.state, "transition_to"):
-                                if self.is_awake():
-                                    self.state.transition_to(BehaviorState.LISTENING, reason="turn_complete_listening")
-                                else:
-                                    self.state.transition_to(BehaviorState.IDLE, reason="turn_complete_idle")
+                                if getattr(self.state, "current_state", None) != BehaviorState.PRESENTING and not (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()) and not is_active_speech:
+                                    if self.is_awake():
+                                        self.state.transition_to(BehaviorState.LISTENING, reason="turn_complete_listening")
+                                    else:
+                                        self.state.transition_to(BehaviorState.IDLE, reason="turn_complete_idle")
 
-                            # Smoothly return arms to neutral rest pose when turn finishes
-                            if self.gestures and hasattr(self.gestures, "idle_pose"):
-                                self.gestures.play_async(self.gestures.idle_pose, name="turn_complete_rest")
+                            # Smoothly return arms to neutral rest pose when turn finishes (unless presenting or in speech session)
+                            if getattr(self.state, "current_state", None) != BehaviorState.PRESENTING and not (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()) and not is_active_speech:
+                                if self.gestures and hasattr(self.gestures, "idle_pose"):
+                                    self.gestures.play_async(self.gestures.idle_pose, name="turn_complete_rest")
                             
                     # Handle Tool Calls
                     if "toolCall" in data:
@@ -735,6 +1041,13 @@ class GeminiLiveClient:
                                     if name == "set_silent_mode":
                                         dur = args.get("duration_seconds", 300.0) or 300.0
                                         self.set_silent_until(time.time() + float(dur))
+                                    elif name == "start_presentation":
+                                        if self.speaker:
+                                            try:
+                                                self.speaker.stop_stream()
+                                            except Exception:
+                                                pass
+                                        self._speaker_active_until = 0.0
                                 except asyncio.TimeoutError:
                                     logger.error(f"Tool '{name}' execution timed out after 12.0s.")
                                     result = f"Error: Tool '{name}' execution timed out."
@@ -774,7 +1087,12 @@ class GeminiLiveClient:
         """
         # Simple duplicate suppression within 10 seconds
         now = time.time()
-        with self._inject_lock:
+        lock = getattr(self, "_inject_lock", None)
+        if lock is None:
+            self._inject_lock = threading.Lock()
+            lock = self._inject_lock
+
+        with lock:
             if hasattr(self, "_last_injected_text") and self._last_injected_text == text:
                 if (now - getattr(self, "_last_injected_time", 0.0)) < 10.0:
                     logger.debug("Suppressing duplicate context injection within 10s.")

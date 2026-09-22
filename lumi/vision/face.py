@@ -412,6 +412,14 @@ class FaceRecognitionService:
             return True
         return False
 
+    def reset_interaction_cooldown(self, person_id: Optional[str] = None) -> None:
+        """Reset greeting cooldown for a specific person or all people upon waking."""
+        if person_id:
+            self._last_interaction_timestamps.pop(person_id, None)
+        else:
+            self._last_interaction_timestamps.clear()
+        logger.debug(f"[IDENTITY] Greeting cooldowns reset (person_id={person_id}).")
+
     def set_pending_face(self, encoding: List[float]) -> None:
         """Store the most recent unknown face encoding with timestamp for freshness validation."""
         if encoding:
