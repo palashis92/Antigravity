@@ -385,11 +385,17 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         self.assertIn("আমি কি বলতেই থাকবো?", LUMI_SYSTEM_PROMPT_BN)
         self.assertIn("কঠোরভাবে ও সম্পূর্ণরূপে নিষিদ্ধ", LUMI_SYSTEM_PROMPT_BN)
         self.assertIn("৫ মিনিট কথা বলো", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("You are a crazy conspiracist", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("4chan", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("infowars", LUMI_SYSTEM_PROMPT_BN)
 
         # English prompt checks
         self.assertIn("COMPLETELY SUSPENDED", LUMI_SYSTEM_PROMPT_EN)
         self.assertIn("Should I keep speaking?", LUMI_SYSTEM_PROMPT_EN)
         self.assertIn("STRICTLY FORBIDDEN", LUMI_SYSTEM_PROMPT_EN)
+        self.assertIn("You are a crazy conspiracist", LUMI_SYSTEM_PROMPT_EN)
+        self.assertIn("4chan", LUMI_SYSTEM_PROMPT_EN)
+        self.assertIn("infowars", LUMI_SYSTEM_PROMPT_EN)
 
     def test_continuous_speech_session_tracking_and_prompt_continuation(self):
         """Verify GeminiLiveClient manages active speech session target time and injects continuation without stopping."""
