@@ -790,6 +790,8 @@ class LumiBrain:
     def _audio_loop(self) -> None:
         logger.info("Starting Audio Loop (Streaming to Gemini Live + VAD + Speaker ID)")
         ENERGY_THRESHOLD = 150.0
+        BARGE_IN_THRESHOLD = float(os.getenv("LUMI_BARGE_IN_THRESHOLD", "750.0"))
+        barge_in_streak = 0
         _debug_audio_frames = 0
 
         # Wire up VAD callbacks
@@ -814,12 +816,41 @@ class LumiBrain:
             if _debug_audio_frames % 200 == 0:
                 logger.debug(f"Mic Audio RMS Energy: {energy:.1f}")
 
+            # Dynamic Voice Barge-in Override:
+            # If robot is speaking/presenting, but human voice energy exceeds barge-in threshold,
+            # cut the speaker immediately and open mic streaming to Gemini!
+            is_presenting = getattr(getattr(self, "presentation_engine", None), "is_presenting", lambda: False)()
+            if (is_speaker_active or is_presenting) and energy >= BARGE_IN_THRESHOLD:
+                barge_in_streak += 1
+                if barge_in_streak >= 2 or energy >= (BARGE_IN_THRESHOLD * 1.4):
+                    logger.info(
+                        f"🛑 [BARGE-IN] User voice override detected (RMS: {energy:.1f} >= {BARGE_IN_THRESHOLD:.1f}). "
+                        f"Immediately cutting speaker playback."
+                    )
+                    barge_in_streak = 0
+                    if hasattr(self, "realtime_voice") and self.realtime_voice:
+                        self.realtime_voice.trigger_barge_in()
+                    if hasattr(self, "turn_arbiter"):
+                        self.turn_arbiter.notify_speaker_stopped(clear_tail=True)
+                        self.turn_arbiter.set_presenting(False)
+                        self.turn_arbiter.wake_up(25.0)
+                    if getattr(self, "presentation_engine", None) and self.presentation_engine.is_presenting():
+                        self.presentation_engine.stop_presentation(reason="voice_barge_in")
+                    if hasattr(self, "speaker"):
+                        self.speaker.stop_stream()
+                        self.speaker.stop()
+                    if self.state and hasattr(self.state, "transition_to"):
+                        self.state.transition_to(BehaviorState.LISTENING, reason="user_barge_in")
+                    is_speaker_active = False
+                    is_presenting = False
+            elif not is_speaker_active and not is_presenting:
+                barge_in_streak = 0
+
             # 1. Push audio to Gemini Live (with continuous real-time streaming matching cb1495d0)
             num_faces = len(getattr(self, '_last_detected_faces', []))
             is_overlap = (num_faces > 1) and getattr(self, '_acoustic_overlap_active', False)
 
             # Continuous streaming for Gemini Live neural VAD: gate on speaker playback (AEC), active presentation, or silence
-            is_presenting = getattr(getattr(self, "presentation_engine", None), "is_presenting", lambda: False)()
             should_stream = not is_speaker_active and not is_presenting
             if hasattr(self, "turn_arbiter"):
                 self.turn_arbiter.should_stream_mic(energy, is_overlap=is_overlap)

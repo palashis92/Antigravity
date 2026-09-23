@@ -154,6 +154,17 @@ class I2SSpeakerBackend(SpeakerBackendBase):
             proc = None
             self._stream_proc = None
 
+    @property
+    def is_playing(self) -> bool:
+        """True if the speaker backend is actively outputting sound."""
+        if self._current_process is not None and self._current_process.poll() is None:
+            return True
+        if self._stream_proc is not None and self._stream_proc.poll() is None:
+            return True
+        if hasattr(self, "_stream_queue") and not self._stream_queue.empty():
+            return True
+        return False
+
     def _convert_to_clean_wav(self, input_path: str) -> str:
         """Convert MP3/compressed audio to 16-bit 44.1kHz Stereo PCM WAV for clean I2S DAC output."""
         output_wav = tempfile.mktemp(suffix="_clean.wav")
@@ -358,6 +369,11 @@ class SpeakerInterface:
     @property
     def is_muted(self) -> bool:
         return getattr(self.backend, "is_muted", self._muted)
+
+    @property
+    def is_playing(self) -> bool:
+        """True if the speaker is actively outputting sound."""
+        return getattr(self.backend, "is_playing", False)
 
     def play_file(self, file_path: str, block: bool = True) -> bool:
         if self.is_muted:

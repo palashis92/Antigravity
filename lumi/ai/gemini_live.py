@@ -57,8 +57,9 @@ class GeminiLiveClient:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.turn_arbiter = turn_arbiter
         
-        # Default to Gemini Live production model (models/gemini-3.1-flash-live-preview) with override support
-        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.1-flash-live-preview")
+        # Default to Gemini Live production model (models/gemini-3.8-flash-live-extended-thinking) with override support
+        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.8-flash-live-extended-thinking")
+        self._was_interrupted_this_turn: bool = False
         
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -156,12 +157,46 @@ class GeminiLiveClient:
         """Return True if robot is currently silenced by user command."""
         return time.time() < getattr(self, "_silent_until", 0.0)
 
+    def trigger_barge_in(self) -> None:
+        """Instantly interrupt active robot speech, clear speech sessions, and transition to LISTENING."""
+        logger.info("🛑 [GEMINI LIVE] Local voice override / barge-in triggered.")
+        self._speaker_active_until = 0.0
+        self._active_speech_target_end = 0.0
+        self._active_speech_topic = ""
+        self._speech_continuation_count = 0
+        self._was_interrupted_this_turn = True
+
+        if hasattr(self, "speaker") and self.speaker:
+            try:
+                self.speaker.stop_stream()
+                self.speaker.stop()
+            except Exception as e:
+                logger.debug(f"Barge-in speaker stop error: {e}")
+
+        if getattr(self, "turn_arbiter", None):
+            self.turn_arbiter.notify_speaker_stopped(clear_tail=True)
+            self.turn_arbiter.set_presenting(False)
+            self.turn_arbiter.record_barge_in(latency_ms=100.0)
+            self.turn_arbiter.wake_up(25.0)
+
+        if self.state and hasattr(self.state, "transition_to"):
+            from ..core.state_manager import BehaviorState
+            if getattr(self.state, "current_state", None) != BehaviorState.PRESENTING:
+                self.state.transition_to(BehaviorState.LISTENING, reason="user_barge_in")
+
+        if self.eyes and hasattr(self.eyes, "set_expression"):
+            self.eyes.set_expression("listening")
+
+        if self.gestures and hasattr(self.gestures, "idle_pose"):
+            self.gestures.play_async(self.gestures.idle_pose, name="barge_in_reset")
+
     def reset_dialogue_state(self) -> None:
         """Reset conversational buffers and turn state on persona / mode change."""
         self._awake = False
         self._awake_until = 0.0
         self._last_active_time = time.time()
         self._speaker_active_until = 0.0
+        self._was_interrupted_this_turn = False
         if getattr(self, "turn_arbiter", None):
             self.turn_arbiter.reset_dialogue()
         logger.info("Gemini Live dialogue & persona state reset.")
@@ -636,11 +671,11 @@ class GeminiLiveClient:
                 }
             }
         }
-        is_extended_thinking = "extended-thinking" in self.model.lower()
+        is_extended_thinking = "extended-thinking" in self.model.lower() or "3.8" in self.model.lower()
         if is_extended_thinking:
-            thinking_level = os.getenv("GEMINI_LIVE_THINKING_LEVEL", "medium").lower()
+            thinking_level = os.getenv("GEMINI_LIVE_THINKING_LEVEL", "low").lower()
             generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
-            logger.info(f"Gemini 3.8 Live Extended Thinking enabled (Level: '{thinking_level}').")
+            logger.info(f"Gemini Live Extended Thinking enabled (Model: '{self.model}', Level: '{thinking_level}').")
 
         setup_msg: Dict[str, Any] = {
             "setup": {
@@ -867,8 +902,8 @@ class GeminiLiveClient:
                             model_turn = server_content.get("modelTurn", {})
                             for part in model_turn.get("parts", []):
                                 if "inlineData" in part:
-                                    if self.is_silent():
-                                        logger.debug("Suppressing Gemini Live audio output: silent mode active.")
+                                    if self.is_silent() or was_interrupted_this_turn or getattr(self, "_was_interrupted_this_turn", False):
+                                        logger.debug("Suppressing Gemini Live audio output: silent mode or interrupted active.")
                                         continue
                                     turn_had_audio = True
                                     audio_bytes = base64.b64decode(part["inlineData"]["data"])
@@ -917,10 +952,14 @@ class GeminiLiveClient:
                             self._speaker_active_until = 0.0
                             turn_had_audio = False
                             was_interrupted_this_turn = True
+                            self._was_interrupted_this_turn = True
+                            self._active_speech_target_end = 0.0
+                            self._active_speech_topic = ""
+                            self._speech_continuation_count = 0
                             if self.state and hasattr(self.state, "transition_to"):
                                 self.state.transition_to(BehaviorState.LISTENING, reason="user_barge_in")
                             if getattr(self, "turn_arbiter", None):
-                                self.turn_arbiter.notify_speaker_stopped()
+                                self.turn_arbiter.notify_speaker_stopped(clear_tail=True)
                                 self.turn_arbiter.record_barge_in(latency_ms=120.0)
                             else:
                                 from ..core.telemetry import get_telemetry
@@ -929,6 +968,7 @@ class GeminiLiveClient:
                             if hasattr(self, "speaker") and self.speaker:
                                 try:
                                     self.speaker.stop_stream()
+                                    self.speaker.stop()
                                 except Exception as e:
                                     logger.debug(f"Interruption mute error: {e}")
                             if self.gestures and hasattr(self.gestures, "idle_pose"):
@@ -1072,6 +1112,7 @@ class GeminiLiveClient:
 
                             turn_had_audio = False
                             was_interrupted_this_turn = False
+                            self._was_interrupted_this_turn = False
                             user_buffer.clear()
                             lumi_buffer.clear()
 

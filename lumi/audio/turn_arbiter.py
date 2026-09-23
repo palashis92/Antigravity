@@ -82,12 +82,15 @@ class AudioTurnArbiter:
                 self._dialogue_active_until, now + duration_s + self.turn_window_s
             )
 
-    def notify_speaker_stopped(self) -> None:
+    def notify_speaker_stopped(self, clear_tail: bool = False) -> None:
         """Called when robot speaker completes playback or is interrupted."""
         with self._lock:
             self._is_speaker_playing = False
-            # Allow echo tail to decay naturally
-            self._speaker_active_until = min(self._speaker_active_until, time.time())
+            # Allow echo tail to decay naturally, unless explicitly cleared on barge-in
+            if clear_tail:
+                self._speaker_active_until = time.time() - (self.echo_tail_s + 0.05)
+            else:
+                self._speaker_active_until = min(self._speaker_active_until, time.time())
 
     def is_speaker_active(self) -> bool:
         """True if the robot speaker is playing or room reverberation is still decaying."""
