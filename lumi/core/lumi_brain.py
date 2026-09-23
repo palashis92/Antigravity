@@ -1355,14 +1355,18 @@ class LumiBrain:
 
         if face.is_known and face.person is not None:
             person = face.person
-            self.active_person = person
-            self._last_face_seen_time = time.time()
-            logger.info(
-                f"[MEMORY] loading profile for person_id={person.id} name='{person.name}' age={person.age}"
-            )
-            logger.info(
-                f"[RESPONSE] recognized_person='{person.name}' confidence={face.confidence:.2f}"
-            )
+            now_t = time.time()
+            if not hasattr(self, "_last_profile_log_time"):
+                self._last_profile_log_time = {}
+            last_prof_t = self._last_profile_log_time.get(person.id, 0.0)
+            if (now_t - last_prof_t) > 10.0:
+                self._last_profile_log_time[person.id] = now_t
+                logger.info(
+                    f"[MEMORY] loading profile for person_id={person.id} name='{person.name}' age={person.age}"
+                )
+                logger.info(
+                    f"[RESPONSE] recognized_person='{person.name}' confidence={face.confidence:.2f}"
+                )
             # Cooldown check (50 minutes / 3000s default to prevent annoying repetitive interruptions)
             vision_conf = getattr(getattr(self, "settings", None), "vision", None)
             cooldown_val = getattr(vision_conf, "greeting_cooldown_s", 3000.0) if vision_conf else 3000.0
@@ -1859,34 +1863,81 @@ class LumiBrain:
         """Describes what the robot currently sees via Gemini Vision API."""
         frame = self.camera.get_frame()
         if frame is None:
-            return "I cannot see anything right now. The camera is offline."
+            return "আমি বর্তমানে কিছু দেখতে পাচ্ছি না। ক্যামেরা অফলাইনে রয়েছে।"
 
         try:
             import cv2
-            import io
-            import google.generativeai as genai  # type: ignore
-            import PIL.Image
             import os
+            import base64
+            import json
+            import urllib.request
+            import urllib.error
 
             api_key = os.getenv("GEMINI_API_KEY")
             if not api_key:
-                return "Vision API key is missing."
+                return "Vision API key পাওয়া যায়নি।"
 
-            ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+            ok, buf = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
             if not ok:
-                return "Could not encode camera frame."
-            pil_image = PIL.Image.open(io.BytesIO(buf.tobytes()))
+                return "ক্যামেরার ফ্রেম প্রসেস করতে ব্যর্থ হয়েছে।"
 
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel("gemini-2.0-flash")
-            response = model.generate_content(
-                ["Describe this image briefly in Bengali (2-3 sentences).", pil_image],
-                generation_config=genai.GenerationConfig(temperature=0.4, max_output_tokens=200),
-            )
-            return response.text.strip()
+            # 1. Try modern google-genai SDK
+            try:
+                from google import genai
+                from google.genai import types
+
+                client = genai.Client(api_key=api_key)
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=[
+                        types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"),
+                        "Describe this camera scene briefly in natural Bengali (2-3 sentences). Focus on what objects, persons, actions, or environment you see in front of the robot."
+                    ],
+                    config=types.GenerateContentConfig(
+                        temperature=0.4,
+                        max_output_tokens=200,
+                    ),
+                )
+                if response and response.text:
+                    return response.text.strip()
+            except Exception as sdk_err:
+                logger.debug(f"google-genai SDK vision call failed, trying direct REST: {sdk_err}")
+
+            # 2. Resilient Fallback: Direct Gemini REST endpoint via urllib (zero external dependency)
+            b64_img = base64.b64encode(buf.tobytes()).decode("utf-8")
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {
+                            "inline_data": {
+                                "mime_type": "image/jpeg",
+                                "data": b64_img
+                            }
+                        },
+                        {"text": "Describe this camera scene briefly in natural Bengali (2-3 sentences). Focus on what objects, persons, actions, or environment you see in front of the robot."}
+                    ]
+                }],
+                "generationConfig": {
+                    "temperature": 0.4,
+                    "maxOutputTokens": 200
+                }
+            }
+            req_data = json.dumps(payload).encode("utf-8")
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+            req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                res_data = json.loads(resp.read().decode("utf-8"))
+                candidates = res_data.get("candidates", [])
+                if candidates:
+                    parts = candidates[0].get("content", {}).get("parts", [])
+                    texts = [p.get("text", "") for p in parts if "text" in p]
+                    if texts:
+                        return "".join(texts).strip()
+
+            return "আমি ক্যামেরা থেকে যা দেখতে পাচ্ছি তা বিস্তারিত বোঝা যাচ্ছে না।"
         except Exception as e:
             logger.error(f"Vision describe error: {e}")
-            return "I'm having trouble understanding what I see right now."
+            return "আমি বর্তমানে সামনে যা দেখতে পাচ্ছি তা বুঝতে সমস্যা হচ্ছে।"
 
 
     def _is_silent(self) -> bool:
@@ -2046,7 +2097,10 @@ class LumiBrain:
         """Analyze, store, and dynamically adapt to behavioral instructions and advice from the user."""
         # 1. Store in JSON persistent file
         if hasattr(self, "learned_rules"):
-            self.learned_rules.add_rule(user_feedback, adapted_rule, category)
+            try:
+                self.learned_rules.add_rule(user_feedback, adapted_rule, category)
+            except Exception as e:
+                logger.debug(f"Could not persist rule to JSON: {e}")
 
         # 2. Store in SQLite facts as a permanent system directive
         if hasattr(self, "memory") and self.memory:
@@ -2054,20 +2108,21 @@ class LumiBrain:
                 self.memory.remember_fact(
                     fact_text=f"[LEARNED RULE]: {adapted_rule} (from user advice: '{user_feedback}')",
                     category="user_directive",
-                    source="user_correction",
                 )
             except Exception as e:
                 logger.debug(f"Could not persist rule to SQLite facts: {e}")
 
-        # 3. Store in Mem0 if available
+        # 3. Store in Mem0 asynchronously in a background thread to prevent blocking the event loop
         if hasattr(self, "mem0") and hasattr(self.mem0, "remember_fact_sync"):
-            try:
-                self.mem0.remember_fact_sync(
-                    person_id="system_rules",
-                    fact=f"Behavior rule: {adapted_rule}"
-                )
-            except Exception:
-                pass
+            def _bg_mem0_save():
+                try:
+                    self.mem0.remember_fact_sync(
+                        person_id="system_rules",
+                        fact=f"Behavior rule: {adapted_rule}"
+                    )
+                except Exception as e:
+                    logger.debug(f"Mem0 bg save error: {e}")
+            threading.Thread(target=_bg_mem0_save, daemon=True, name="Mem0SaveWorker").start()
 
         # 4. Dynamically inject into active Gemini Live session
         if hasattr(self, "realtime_voice") and hasattr(self.realtime_voice, "inject_context"):

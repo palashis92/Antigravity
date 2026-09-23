@@ -870,9 +870,6 @@ class GeminiLiveClient:
                                     if self.is_silent():
                                         logger.debug("Suppressing Gemini Live audio output: silent mode active.")
                                         continue
-                                    if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
-                                        logger.debug("Suppressing Gemini Live audio output: presentation mode active.")
-                                        continue
                                     turn_had_audio = True
                                     audio_bytes = base64.b64decode(part["inlineData"]["data"])
                                     self._last_active_time = time.time()
@@ -891,7 +888,8 @@ class GeminiLiveClient:
                                         self.turn_arbiter.notify_speaker_started(duration)
 
                                     if self.state and hasattr(self.state, "transition_to"):
-                                        self.state.transition_to(BehaviorState.SPEAKING, reason="gemini_live_speech")
+                                        if getattr(self.state, "current_state", None) != BehaviorState.PRESENTING:
+                                            self.state.transition_to(BehaviorState.SPEAKING, reason="gemini_live_speech")
 
                                     self.speaker.play_stream(audio_bytes, sample_rate=24000)
 
@@ -1064,16 +1062,13 @@ class GeminiLiveClient:
                             # synthesize via BanglaTTS and play so the robot is NEVER mute!
                             # Guard: Do NOT synthesize if user interrupted/barged-in (they deliberately stopped LUMI)
                             if l_text and not turn_had_audio and not was_interrupted_this_turn and not self.is_silent():
-                                if getattr(self.state, "current_state", None) == BehaviorState.PRESENTING or (getattr(self, "turn_arbiter", None) and self.turn_arbiter.is_presenting()):
-                                    logger.debug("Suppressing Gemini Live fallback TTS: presentation mode active.")
-                                else:
-                                    logger.info(f"Gemini Live returned text without audio stream. Running fallback TTS for: '{l_text[:40]}...'")
-                                    try:
-                                        tts_file = self.tts.synthesize(l_text)
-                                        if tts_file and hasattr(self.speaker, "play_file"):
-                                            self.speaker.play_file(tts_file, block=False)
-                                    except Exception as e:
-                                        logger.warning(f"Fallback TTS synthesis error: {e}")
+                                logger.info(f"Gemini Live returned text without audio stream. Running fallback TTS for: '{l_text[:40]}...'")
+                                try:
+                                    tts_file = self.tts.synthesize(l_text)
+                                    if tts_file and hasattr(self.speaker, "play_file"):
+                                        self.speaker.play_file(tts_file, block=False)
+                                except Exception as e:
+                                    logger.warning(f"Fallback TTS synthesis error: {e}")
 
                             turn_had_audio = False
                             was_interrupted_this_turn = False

@@ -54,8 +54,14 @@ class DetectedFace:
 class FaceRecognitionService:
     """Detects and identifies faces, retrieving memory profiles and triggering consent workflows."""
 
-    def __init__(self, memory_manager: MemoryManager, recognition_threshold: float = 0.55) -> None:
+    def __init__(self, memory_manager: MemoryManager, recognition_threshold: float = 0.45) -> None:
         self.memory = memory_manager
+        env_thresh = os.getenv("LUMI_FACE_RECOGNITION_THRESHOLD")
+        if env_thresh:
+            try:
+                recognition_threshold = float(env_thresh)
+            except ValueError:
+                pass
         self.recognition_threshold = recognition_threshold
         self._cascade = None
         self._cascade_initialized = False

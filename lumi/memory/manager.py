@@ -267,11 +267,20 @@ class MemoryManager:
         # Enforce consent policy if associated with a person
         if person_id is not None:
             person = self.get_person(person_id)
-            if person and person.consent_status == ConsentStatus.DENIED:
-                logger.warning(
-                    f"Consent DENIED for person '{person.name}'. Fact will NOT be saved."
+            if person:
+                if person.consent_status == ConsentStatus.DENIED:
+                    logger.warning(
+                        f"Consent DENIED for person '{person.name}'. Fact will NOT be saved."
+                    )
+                    return None
+            else:
+                # person_id does not exist in people table (e.g. 'system_rules', 'general', etc.)
+                # In SQLite, facts.person_id has a FOREIGN KEY referencing people(id).
+                # Setting person_id to None ensures the fact is stored safely without FK violation.
+                logger.debug(
+                    f"person_id='{person_id}' does not exist in people table; saving fact with person_id=None to prevent FK constraint failure."
                 )
-                return None
+                person_id = None
 
         fact = Fact(
             person_id=person_id,
