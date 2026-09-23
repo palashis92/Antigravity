@@ -57,8 +57,8 @@ class GeminiLiveClient:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.turn_arbiter = turn_arbiter
         
-        # Default to Gemini Live production model (models/gemini-3.8-flash-live-extended-thinking) with override support
-        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.8-flash-live-extended-thinking")
+        # Default to Gemini Live production model (models/gemini-3.1-flash-live-preview) with override support
+        self.model = os.getenv("GEMINI_LIVE_MODEL", "models/gemini-3.1-flash-live-preview")
         self._was_interrupted_this_turn: bool = False
         
         self._running = False
