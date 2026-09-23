@@ -83,11 +83,16 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                 if proc is None or proc.poll() is not None or current_sample_rate != sample_rate:
                     if proc is not None:
                         if proc.poll() is not None and proc.stderr:
-                            err = proc.stderr.read().decode('utf-8', errors='ignore')
-                            if err.strip():
-                                logger.error(f"aplay exited unexpectedly: {err.strip()}")
+                            try:
+                                if not getattr(proc.stderr, "closed", False):
+                                    err = proc.stderr.read().decode('utf-8', errors='ignore')
+                                    if err.strip():
+                                        logger.error(f"aplay exited unexpectedly: {err.strip()}")
+                            except Exception:
+                                pass
                         try:
-                            if proc.stdin: proc.stdin.close()
+                            if proc.stdin and not getattr(proc.stdin, "closed", False):
+                                proc.stdin.close()
                             proc.terminate()
                         except Exception: pass
                         proc = None

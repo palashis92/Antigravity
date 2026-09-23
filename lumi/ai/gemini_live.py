@@ -950,7 +950,7 @@ class GeminiLiveClient:
                             if txt:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
-                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
                                     logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali.")
                                     self.inject_context(
                                         "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
@@ -965,11 +965,11 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
-                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
                                     logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock.")
                                     self.inject_context(
                                         "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
-                                        trigger_response=True
+                                        trigger_response=False
                                     )
                                 elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
                                     import re
@@ -977,7 +977,7 @@ class GeminiLiveClient:
                                         logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
                                         self.inject_context(
                                             f"[DO NOT ASK PERMISSION]: Continue speaking on '{self._active_speech_topic}' continuously. Do not ask check-in questions!",
-                                            trigger_response=True
+                                            trigger_response=False
                                         )
                         if "inputTranscription" in content:
                             txt = _get_text(content['inputTranscription'])
@@ -985,7 +985,7 @@ class GeminiLiveClient:
                             if txt:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
-                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
                                     logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali.")
                                     self.inject_context(
                                         "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
@@ -1000,11 +1000,11 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
-                                if any('\u0900' <= char <= '\u097f' for char in txt):
+                                if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
                                     logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock.")
                                     self.inject_context(
                                         "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
-                                        trigger_response=True
+                                        trigger_response=False
                                     )
                                 elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
                                     import re
@@ -1012,7 +1012,7 @@ class GeminiLiveClient:
                                         logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
                                         self.inject_context(
                                             f"[DO NOT ASK PERMISSION]: Continue speaking on '{self._active_speech_topic}' continuously. Do not ask check-in questions!",
-                                            trigger_response=True
+                                            trigger_response=False
                                         )
 
                         if "interimInputTranscription" in content:

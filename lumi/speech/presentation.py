@@ -327,35 +327,39 @@ class PresentationEngine:
             self.realtime_voice._active_speech_target_end = time.time() + duration_s
             self.realtime_voice._active_speech_topic = topic
             self.realtime_voice._speech_continuation_count = 0
-            if hasattr(self.realtime_voice, "inject_context") and callable(self.realtime_voice.inject_context):
-                speech_cmd = (
-                    f"[MANDATORY CONTINUOUS SPEECH DIRECTIVE: {duration_minutes:.1f}-MINUTE SPEECH ON '{topic}']:\n"
-                    f"Deliver an uninterrupted, comprehensive monologue directly in your voice for the full {duration_minutes:.1f} minutes (~{int(duration_minutes*120)} words). "
-                    f"Do NOT stop after 1 minute! NEVER ask 'আমি কি বলতেই থাকবো?', 'আমি কি আরো বলব?', or any check-in questions! "
-                    f"Speak continuously with deep analysis, historical background, real-world examples, and inspiring vision."
-                )
-                try:
-                    self.realtime_voice.inject_context(speech_cmd, trigger_response=True)
-                except Exception as e:
-                    logger.debug(f"Presentation context inject notice: {e}")
 
-        # Generate structured speech segments
-        segments = self.generate_speech_script(
-            topic=topic,
-            duration_minutes=duration_minutes,
-            audience=audience,
-            key_points=key_points,
-        )
+            # Gemini Live delivers speech directly over WebSocket.
+            # Start background gesture accompaniment worker immediately without blocking.
+            self._presentation_thread = threading.Thread(
+                target=self._delivery_worker,
+                args=([], topic),
+                name="LumiPresentationWorker",
+                daemon=True,
+            )
+            self._presentation_thread.start()
+
+            msg = f"বক্তব্য শুরু হচ্ছে: '{topic}'।"
+            logger.info(msg)
+            return msg
+
+        # Offline / Fallback mode: Generate script and deliver via TTS on background worker
+        def _bg_generate_and_deliver():
+            segments = self.generate_speech_script(
+                topic=topic,
+                duration_minutes=duration_minutes,
+                audience=audience,
+                key_points=key_points,
+            )
+            self._delivery_worker(segments, topic)
 
         self._presentation_thread = threading.Thread(
-            target=self._delivery_worker,
-            args=(segments, topic),
+            target=_bg_generate_and_deliver,
             name="LumiPresentationWorker",
             daemon=True,
         )
         self._presentation_thread.start()
 
-        msg = f"বক্তব্য শুরু হচ্ছে: '{topic}' (আনুমানিক {len(segments)}টি পর্বে বিভক্ত)।"
+        msg = f"বক্তব্য শুরু হচ্ছে: '{topic}'।"
         logger.info(msg)
         return msg
 
