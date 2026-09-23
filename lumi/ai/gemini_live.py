@@ -1215,13 +1215,26 @@ class GeminiLiveClient:
                 logger.warning("Dropped context injection: WS not ready.")
                 return
                 
-            # Gemini Live API: In-session text updates must be sent via realtimeInput.
-            # (clientContent is only permitted for initial session history seeding).
-            event = {
-                "realtimeInput": {
-                    "text": text
+            # Gemini Live API: To trigger an immediate response turn from Gemini, send clientContent with turnComplete=True.
+            # For background assimilation without interruption, send via realtimeInput.
+            if trigger_response:
+                event = {
+                    "clientContent": {
+                        "turns": [
+                            {
+                                "role": "user",
+                                "parts": [{"text": text}]
+                            }
+                        ],
+                        "turnComplete": True
+                    }
                 }
-            }
+            else:
+                event = {
+                    "realtimeInput": {
+                        "text": text
+                    }
+                }
             try:
                 await ws.send(json.dumps(event))
                 logger.info(f"Context injected into Gemini Live (trigger_response={trigger_response}).")

@@ -750,8 +750,8 @@ class LumiBrain:
                 if frame is not None:
                     self.process_person_interaction(frame)
 
-            # Fall back to designated owner if active person timed out (no face for 30s)
-            if self.active_person and (now - self._last_face_seen_time > 30.0):
+            # Fall back to designated owner if active person timed out (no face for 90s)
+            if self.active_person and (now - self._last_face_seen_time > 90.0):
                 owner = self.get_owner()
                 if owner and getattr(self.active_person, "id", None) != owner.id:
                     logger.info(f"Active person '{self.active_person.name}' timed out. Resetting to owner '{owner.name}'.")
@@ -1377,21 +1377,32 @@ class LumiBrain:
                 logger.debug(f"Silent mode active: suppressing greeting for {person.name}.")
                 return
 
-            # If LUMI is actively speaking, listening, presenting, or in active dialogue, do not interrupt
+            # Do NOT interrupt if LUMI is actively vocalizing (speaking), delivering a presentation, in a meeting, or already greeting
             if self.state.current_state in (
                 BehaviorState.SPEAKING,
-                BehaviorState.LISTENING,
                 BehaviorState.PRESENTING,
                 BehaviorState.THINKING,
                 BehaviorState.GREETING,
                 BehaviorState.MEETING,
-                BehaviorState.OBSERVING,
             ) or (
-                hasattr(self, "turn_arbiter") and self.turn_arbiter.is_in_dialogue()
+                hasattr(self, "speaker") and getattr(self.speaker, "is_playing", False)
             ):
                 return
 
+            # If user is currently in the middle of speaking into the microphone, do not interrupt their speech
+            if hasattr(self, "vad") and getattr(self.vad, "is_speech_active", lambda: False)():
+                return
+
+            # If already in an active dialogue with this SAME person, do not re-greet them mid-conversation
+            is_same_active_person = (
+                getattr(self, "active_person", None) is not None
+                and self.active_person.id == person.id
+            )
+            if is_same_active_person and hasattr(self, "turn_arbiter") and self.turn_arbiter.is_in_dialogue():
+                return
+
             if self.face_service.should_interact(person.id, cooldown_s=cooldown_val):
+                self.active_person = person
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
