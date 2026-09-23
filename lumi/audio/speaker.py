@@ -47,6 +47,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         self.alsa_device = alsa_device
         self.volume = volume
         self._muted = False
+        self._fallback_hw_device: Optional[str] = None
         self._current_process: Optional[subprocess.Popen] = None
         self._stream_proc: Optional[subprocess.Popen] = None
         self._stream_queue: queue.Queue = queue.Queue()
@@ -56,6 +57,34 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         )
         self._stream_thread.start()
         logger.info(f"Speaker initialized on ALSA device {self.alsa_device}")
+
+    @staticmethod
+    def _detect_hardware_device() -> Optional[str]:
+        """Detect actual hardware soundcard (e.g. seeed-2mic-voicecard / wm8960 / max98357a)."""
+        import re
+        import shutil
+        if not shutil.which("aplay"):
+            return None
+        try:
+            res = subprocess.run(["aplay", "-l"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=2)
+            if res.returncode == 0:
+                # 1. Look for seeed, wm8960, or max98357a
+                for line in res.stdout.splitlines():
+                    if any(k in line.lower() for k in ["seeed", "wm8960", "voicecard", "max98357a", "i2s"]):
+                        m = re.search(r"card\s+(\d+):\s*([^,\[]+)", line)
+                        if m:
+                            card_name = m.group(2).strip()
+                            return f"plughw:CARD={card_name},DEV=0"
+                # 2. Non-HDMI hardware card
+                for line in res.stdout.splitlines():
+                    if "card " in line and "hdmi" not in line.lower():
+                        m = re.search(r"card\s+(\d+):\s*([^,\[]+)", line)
+                        if m:
+                            card_name = m.group(2).strip()
+                            return f"plughw:CARD={card_name},DEV=0"
+        except Exception:
+            pass
+        return None
 
     def _stream_worker_loop(self) -> None:
         """Background worker thread feeding streaming audio chunks to a persistent aplay process."""
@@ -88,6 +117,12 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                                     err = proc.stderr.read().decode('utf-8', errors='ignore')
                                     if err.strip():
                                         logger.error(f"aplay exited unexpectedly: {err.strip()}")
+                                        if any(k in err for k in ["Host is down", "Connection refused", "No such file or directory"]):
+                                            hw = self._detect_hardware_device()
+                                            if hw and hw != self._fallback_hw_device:
+                                                logger.warning(f"Audio server unavailable ('{err.strip()}'). Switching speaker to hardware device '{hw}'.")
+                                                self._fallback_hw_device = hw
+                                                time.sleep(0.1)
                             except Exception:
                                 pass
                         try:
@@ -99,7 +134,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                         self._stream_proc = None
                         
                     current_sample_rate = sample_rate
-                    device = "plug:default" if self.alsa_device == "default" else self.alsa_device
+                    device = self._fallback_hw_device or ("plug:default" if self.alsa_device == "default" else self.alsa_device)
                     if shutil.which("aplay"):
                         proc = subprocess.Popen(
                             ["aplay", "-D", device, "-f", "S16_LE", "-r", str(sample_rate), "-c", channels],
@@ -120,6 +155,12 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                         err_text = proc.stderr.read().decode('utf-8', errors='ignore').strip()
                     except Exception:
                         pass
+                if any(k in err_text for k in ["Host is down", "Connection refused", "No such file or directory"]):
+                    hw = self._detect_hardware_device()
+                    if hw and hw != self._fallback_hw_device:
+                        logger.warning(f"Audio server unavailable ('{err_text}'). Switching speaker to hardware device '{hw}'.")
+                        self._fallback_hw_device = hw
+                        time.sleep(0.1)
                 if err_text:
                     logger.error(f"Audio stream worker aplay error: {err_text} (exception: {e})")
                 elif isinstance(e, (BrokenPipeError, OSError, ValueError)):
@@ -239,12 +280,13 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                 except Exception:
                     pass
 
+            clean_device = self._fallback_hw_device or self.alsa_device
             # Try mpg123 if installed
             if is_mp3 and shutil.which("mpg123"):
-                cmd = ["mpg123", "-q", "-a", self.alsa_device, file_path]
+                cmd = ["mpg123", "-q", "-a", clean_device, file_path]
             # Try aplay on clean PCM WAV
             elif shutil.which("aplay"):
-                cmd = ["aplay", "-D", self.alsa_device, clean_path]
+                cmd = ["aplay", "-D", clean_device, clean_path]
             # Fallback to play (sox)
             elif shutil.which("play"):
                 cmd = ["play", "-q", clean_path]
