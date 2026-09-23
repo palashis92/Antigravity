@@ -25,6 +25,10 @@ class MemoryManager:
 
     def __init__(self, db: Database) -> None:
         self.db = db
+        try:
+            self.purge_invalid_persons()
+        except Exception as e:
+            logger.debug(f"Startup purge_invalid_persons skipped: {e}")
         logger.info("MemoryManager initialized.")
 
     # -------------------------------------------------------------------------
@@ -153,6 +157,36 @@ class MemoryManager:
         else:
             rows = self.db.execute_query("SELECT * FROM people ORDER BY last_seen DESC")
         return [Person.from_row(r) for r in rows]
+
+    def delete_person(self, person_id: str) -> bool:
+        """Permanently delete a person profile and associated references from the database."""
+        try:
+            self.db.execute_write("DELETE FROM people WHERE id = ?", (person_id,))
+            self.db.execute_write("DELETE FROM facts WHERE person_id = ?", (person_id,))
+            self.db.execute_write("UPDATE conversation_turns SET person_id = NULL WHERE person_id = ?", (person_id,))
+            logger.info(f"Deleted person_id={person_id} from database.")
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting person_id={person_id}: {e}")
+            return False
+
+    def purge_invalid_persons(self) -> int:
+        """Purge invalid/accidental persons (e.g. 'চলছে', 'আমি', 'অলরেডি') created by loose regex."""
+        invalid_names = {
+            "চলছে", "চলল", "চললো", "অলরেডি", "আমি", "তুমি", "তুই", "সে", "তিনি",
+            "এটা", "ওটা", "সেটা", "হচ্ছে", "হলো", "হল", "হবে", "আছি", "আছে", "ছিল"
+        }
+        count = 0
+        try:
+            for p in self.list_people():
+                cleaned = p.name.strip().lower()
+                if cleaned in invalid_names or p.name.strip() in invalid_names or len(cleaned) < 2:
+                    self.delete_person(p.id)
+                    count += 1
+                    logger.warning(f"[CLEANUP] Purged accidental person: id={p.id}, name='{p.name}'")
+        except Exception as e:
+            logger.debug(f"Error during purge_invalid_persons: {e}")
+        return count
 
     def find_person_by_face(
         self, embedding: list, threshold: float = 0.55

@@ -23,6 +23,7 @@ from ..core.state_manager import BehaviorState, StateManager
 from ..documents.pdf_generator import PDFReportGenerator
 from ..eyes.renderer import EyeRenderer
 from ..memory.manager import MemoryManager
+from ..memory.models import ConsentStatus, utc_now_iso
 from ..motion.arms import ArmController
 from ..motion.gestures import GestureManager
 from ..motion.head import HeadController
@@ -454,45 +455,83 @@ class LumiBrain:
         if not t:
             return None
 
-        # Common non-name words (verbs, pronouns, adjectives, determiners) to ignore
+        # Comprehensive exclusion of Bengali & English functional words, pronouns, verbs, adverbs, objects
         stopwords = {
-            "ভালো", "ভালোই", "খারাপ", "ঠিক", "আছি", "এখানে", "চাচ্ছি", "চাই", "বলছি",
-            "বলতে", "জানি", "লুমি", "রোবট", "একটা", "একটু", "ঘুমাই", "খাই", "যাই", "না",
-            "তো", "মানুষ", "মালিক", "আসি", "গেছি", "শুনছি", "দেখছি", "বলবো", "বলব", "করি", "করছি",
-            "কোন", "কোনো", "কিছু", "কি", "কেন", "কোথায়", "কখন", "কিভাবে", "কাউকে", "কারো",
-            "কখনো", "মনে", "শুধু", "এখন", "আজ", "কাল", "পরশু", "সব", "সবাই", "তোমরা",
-            "আমরা", "আপনারা", "বলতেছি", "চাইনা", "চাইনি", "প্রশ্ন", "কথা", "ইতিহাস", "উত্তর", "বিষয়",
-            "fine", "good", "bad", "here", "ready", "going", "doing", "speaking", "talking",
-            "robot", "lumi", "yes", "no", "ok", "okay", "who", "what", "where", "when", "why"
+            # Pronouns & determiners
+            "আমি", "তুমি", "তুই", "আপনি", "সে", "তিনি", "তারা", "আমরা", "তোমরা", "আপনারা",
+            "ইনি", "উনি", "এটা", "ওটা", "সেটা", "এগুলো", "ওগুলো", "যা", "তা", "যে", "কে",
+            "কারা", "কেউ", "কাউকে", "কারো", "কার", "নিজেকে", "নিজে", "নিজেই", "নিজের",
+            # Common verbs (all common inflections)
+            "চলছে", "চলল", "চললো", "চলে", "করছি", "করছিলা", "করছিলে", "করছিলাম", "করবে",
+            "করবেন", "করবা", "করব", "করবো", "করি", "করে", "করিস", "করতে", "করলে", "করলাম",
+            "করার", "হইছে", "হচ্ছে", "হয়েছে", "হয়ে", "হয়েছিল", "হলো", "হল", "হবে", "হবেন",
+            "হলে", "হওয়ার", "আছি", "আছো", "আছেন", "আছে", "ছিল", "ছিলেন", "ছিলাম", "ছিলে",
+            "থাকা", "থাকি", "থাকো", "থাকেন", "থাকবে", "থাকলে", "যাই", "যাও", "যান", "যায়",
+            "যাবে", "যাবেন", "যাব", "যাবো", "গেলাম", "গেল", "গেলা", "গেছে", "গিয়ে", "খাই",
+            "খাও", "খান", "খায়", "খাবে", "খাবো", "খাব", "বলি", "বলো", "বলেন", "বলে", "বলবে",
+            "বলবেন", "বলব", "বলবো", "বলছি", "বলতে", "শুনি", "শুনো", "শুনেন", "শুনে", "শুনবে",
+            "শুনব", "শুনবো", "শুনছি", "শুনতে", "দেখছি", "দেখি", "দেখো", "দেখেন", "দেখে",
+            "দেখবে", "দেখতে", "আসি", "আসো", "আসেন", "আসে", "আসবে", "আসব", "আসবো", "আসছি",
+            "পারি", "পারো", "পারেন", "পারে", "পারব", "পারবো", "পারবে", "পারবেন", "জানি",
+            "জানেন", "জানে", "জানবে", "জানব", "চাই", "চাও", "চায়", "চাইবে", "চাইব", "চাইনা",
+            "চাইনি", "দিলে", "দিল", "দিলেন", "দিয়ে", "দিচ্ছে", "দেয়", "দেবে", "দেব", "দেবো",
+            "দাও", "দিন", "নেন", "নাও", "নেয়", "নেবে", "নিলে", "রাখো", "রাখেন", "রাখে", "রাখবে",
+            "বসো", "বসেন", "বসে", "পাঠাইছো", "পাঠাইছে", "ঘুমাই", "ঘুমায়", "ঘুমাবেন",
+            # Common adverbs, particles, conjunctions, and objects
+            "অলরেডি", "এখন", "তখন", "কখনো", "কখনোবা", "শুধু", "মাত্র", "ঠিক", "ভুল", "ভালো",
+            "ভালোই", "খারাপ", "একটু", "একটা", "এক", "দুই", "তিন", "অনেক", "বেশি", "খুব",
+            "আর", "এবং", "কিন্তু", "তবে", "তাই", "যাতে", "যেন", "কারণ", "কেন", "কোথায়",
+            "কখন", "কিভাবে", "কেমন", "না", "নাই", "নেই", "নি", "তো", "মানুষ", "মালিক",
+            "কোন", "কোনো", "কিছু", "কি", "কী", "সব", "সবাই", "সবসময়", "প্রশ্ন", "কথা",
+            "ইতিহাস", "উত্তর", "বিষয়", "ক্যামেরা", "ছবি", "রোবট", "লুমি", "সাউন্ড", "চেহারা",
+            "এখানে", "সেখানে", "কোথাও", "খালি", "পুরো", "একদম", "সাথে", "কাছে", "পাশে",
+            # English common words
+            "already", "fine", "good", "bad", "here", "there", "ready", "going", "doing",
+            "speaking", "talking", "robot", "lumi", "yes", "no", "ok", "okay", "who", "what",
+            "where", "when", "why", "how", "this", "that", "it", "is", "was", "are", "am",
+            "not", "the", "my", "your", "his", "her", "their", "our", "just", "only"
         }
 
-        # Pattern 1: 'আমার নাম <নাম>' or 'নাম হলো <নাম>'
-        m = re.search(r"(?:আমার\s+নাম|আমার\s+পরিচয়|নাম\s+হলো|নাম\s+হল)\s+([A-Za-z\u0980-\u09FF]+)", t, re.IGNORECASE)
+        # Pattern 1: 'আমার নাম <নাম>' or 'আমার পরিচয় <নাম>' or 'নাম হলো <নাম>'
+        m = re.search(r"(?:আমার\s+নাম|আমার\s+পরিচয়|আমার\s+পরিচয়|নাম\s+হলো|নাম\s+হল)\s+([A-Za-z\u0980-\u09FF]+)", t, re.IGNORECASE)
         if m:
             name = m.group(1).strip()
             if name.lower() not in stopwords and len(name) >= 2:
                 rel = "creator" if name.lower() in ["palash", "পলাশ"] else "friend"
                 return (name, rel)
 
-        # Pattern 2: 'এ হচ্ছে / এটা আমার বন্ধু / ভাই <নাম>'
-        m = re.search(r"(?:এ\s+হচ্ছে|এ\s+হল|এটা|ওর\s+নাম|এর\s+নাম)\s+(?:আমার\s+)?(?:বন্ধু\s+|ভাই\s+|বোন\s+)?([A-Za-z\u0980-\u09FF]+)", t, re.IGNORECASE)
+        # Pattern 2: Explicit third-person introduction
+        # E.g. 'এ হচ্ছে আমার বন্ধু সাকিব', 'এটা আমার ভাই রাতুল', 'ওর নাম ফারহান', 'ইনি হচ্ছেন ডক্টর করিম'
+        m = re.search(
+            r"(?:(?:এ|এটা|ইনি)\s+(?:হচ্ছে|হল|হলেন|হচ্ছেন)\s+(?:আমার\s+)?(?:বন্ধু\s+|ভাই\s+|বোন\s+|সহকর্মী\s+|স্যার\s+)?|"
+            r"(?:এ|এটা|ইনি)\s+(?:আমার\s+)(?:বন্ধু\s+|ভাই\s+|বোন\s+|সহকর্মী\s+|স্যার\s+)|"
+            r"(?:ওর\s+নাম|এর\s+নাম|ইনার\s+নাম|উনার\s+নাম)\s+)([A-Za-z\u0980-\u09FF]+)",
+            t, re.IGNORECASE
+        )
         if m:
             name = m.group(1).strip()
             if name.lower() not in stopwords and len(name) >= 2:
                 return (name, "friend")
 
-        # Pattern 3: 'আমি <নাম>' / 'ami <name>' (Only on short intro utterances <= 4 words or followed by বলছি/হলাম)
-        word_count = len(t.split())
-        m = re.search(r"^(?:আমি|ami)\s+([A-Za-z\u0980-\u09FF]+)(?:\s+(?:বলছি|হলাম)|[।!?,\s]|$)", t, re.IGNORECASE)
-        if m and (word_count <= 4 or "বলছি" in t or "হলাম" in t):
-            name = m.group(1).strip()
-            if name.lower() not in stopwords and len(name) >= 2:
-                rel = "creator" if name.lower() in ["palash", "পলাশ"] else "friend"
-                return (name, rel)
+        # Pattern 3: Strict self-introduction 'আমি <নাম>' / 'ami <name>'
+        # Must be strictly 2 words (e.g. 'আমি তানভীর') or explicitly followed by 'বলছি' / 'হলাম'
+        words = t.split()
+        if len(words) == 2 and words[0].lower() in ["আমি", "ami"]:
+            candidate = words[1].strip("।,!?")
+            if candidate.lower() not in stopwords and len(candidate) >= 2:
+                rel = "creator" if candidate.lower() in ["palash", "পলাশ"] else "friend"
+                return (candidate, rel)
+        elif len(words) <= 4 and ("বলছি" in t or "হলাম" in t):
+            m = re.search(r"^(?:আমি|ami)\s+([A-Za-z\u0980-\u09FF]+)\s+(?:বলছি|হলাম)", t, re.IGNORECASE)
+            if m:
+                candidate = m.group(1).strip()
+                if candidate.lower() not in stopwords and len(candidate) >= 2:
+                    rel = "creator" if candidate.lower() in ["palash", "পলাশ"] else "friend"
+                    return (candidate, rel)
 
-        # Pattern 4: 'my name is <name>' / 'i am <name>'
-        m = re.search(r"(?:my\s+name\s+is|i\s+am|this\s+is\s+my\s+friend|this\s+is)\s+([A-Za-z]+)", t, re.IGNORECASE)
-        if m and (word_count <= 5 or "name is" in t.lower()):
+        # Pattern 4: 'my name is <name>' / 'this is my friend <name>'
+        m = re.search(r"(?:my\s+name\s+is|this\s+is\s+my\s+friend|this\s+is)\s+([A-Za-z]+)", t, re.IGNORECASE)
+        if m and (len(words) <= 5 or "name is" in t.lower()):
             name = m.group(1).strip()
             if name.lower() not in stopwords and len(name) >= 2:
                 rel = "creator" if name.lower() in ["palash"] else "friend"
@@ -1168,6 +1207,21 @@ class LumiBrain:
             self._audio_thread.join(timeout=1.0)
         logger.info("Lumi Brain stopped.")
 
+    def _arm_greeting_watchdog(self, timeout_s: float = 10.0) -> None:
+        """Watchdog timer to prevent LUMI from being permanently stuck in GREETING state.
+        
+        If Gemini Live suppresses greeting audio (e.g. because user was speaking simultaneously),
+        this timer safely transitions LUMI back to LISTENING after timeout_s seconds.
+        """
+        def _watchdog_worker():
+            time.sleep(timeout_s)
+            if hasattr(self, "state") and getattr(self.state, "current_state", None) == BehaviorState.GREETING:
+                logger.info(f"[GREETING] Watchdog timer ({timeout_s}s) elapsed without speech. Returning to LISTENING.")
+                self.state.transition_to(BehaviorState.LISTENING, reason="greeting_watchdog_timeout")
+
+        import threading
+        threading.Thread(target=_watchdog_worker, daemon=True, name="GreetingWatchdog").start()
+
     def process_person_interaction(self, face_frame: Any) -> None:
         """Autonomous visual pipeline: detect person -> track -> greet -> engage."""
         faces = self.face_service.detect_and_recognize(face_frame)
@@ -1410,6 +1464,7 @@ class LumiBrain:
             if self.face_service.should_interact(person.id, cooldown_s=cooldown_val):
                 self.active_person = person
                 self.state.transition_to(BehaviorState.GREETING, reason=f"spot_{person.name}")
+                self._arm_greeting_watchdog(10.0)
                 self.eyes.set_expression("happy")
                 self.gestures.play_async(self.gestures.greet, name="greet")
                 
@@ -1525,16 +1580,40 @@ class LumiBrain:
 
             # 1. Universal Continuous Face Learning:
             # If an active person is established (Mizan, Palash, or any introduced friend/guest),
-            # automatically capture and store multiple face samples (up to 3) for angle/lighting robustness.
+            # automatically capture and store multiple face samples (up to 5) for angle/lighting robustness,
+            # but ONLY if the face embedding is verified to be close (dist <= 0.58) to their existing face.
             target_person = self.active_person or owner
             if target_person and face.embedding:
-                stored = getattr(target_person, "face_embeddings", [])
-                if len(stored) < 3:
-                    target_person.add_face_embedding(face.embedding)
-                    self.memory.update_person(target_person)
-                    self.active_person = target_person
-                    logger.info(f"[IDENTITY] Auto-enrolled face sample ({len(stored)+1}/3) for '{target_person.name}'.")
-                    return
+                t_lower = target_person.name.strip().lower()
+                invalid_names = {"চলছে", "চলল", "চললো", "চলে", "অলরেডি", "আমি", "তুমি", "তুই", "সে", "তিনি", "এটা", "ওটা", "সেটা"}
+                if t_lower not in invalid_names:
+                    stored = getattr(target_person, "face_embeddings", [])
+                    if len(stored) == 0:
+                        target_person.add_face_embedding(face.embedding)
+                        self.memory.update_person(target_person)
+                        self.active_person = target_person
+                        logger.info(f"[IDENTITY] Initial face sample enrolled for '{target_person.name}'.")
+                        return
+                    elif len(stored) < 5:
+                        try:
+                            import face_recognition
+                            import numpy as np
+                            dists = face_recognition.face_distance(stored, np.array(face.embedding))
+                            min_d = float(dists.min())
+                        except Exception:
+                            import math
+                            min_d = min(
+                                math.sqrt(sum((a - b) ** 2 for a, b in zip(s, face.embedding)))
+                                for s in stored
+                            )
+                        if min_d <= 0.58:
+                            target_person.add_face_embedding(face.embedding)
+                            self.memory.update_person(target_person)
+                            self.active_person = target_person
+                            logger.info(f"[IDENTITY] Auto-enrolled verified face sample ({len(stored)+1}/5, dist={min_d:.3f}) for '{target_person.name}'.")
+                            return
+                        else:
+                            logger.debug(f"[IDENTITY] Face dist={min_d:.3f} > 0.58 to '{target_person.name}'. Not enrolling to avoid identity pollution.")
 
             # 2. Maintain sticky active_person across transient frame misses / lighting shifts
             if self.active_person is not None:
@@ -1585,6 +1664,7 @@ class LumiBrain:
             self._last_unknown_greeting_time = now_t
             self._unknown_greeting_asked = True
             self.state.transition_to(BehaviorState.GREETING, reason="spot_unknown")
+            self._arm_greeting_watchdog(10.0)
             self.eyes.set_expression("curious")
             self.gestures.play_async(self.gestures.greet, name="greet_unknown")
             
@@ -1647,9 +1727,18 @@ class LumiBrain:
                 except Exception as e:
                     logger.debug(f'Face extraction error: {e}')
 
-        from ..memory.models import ConsentStatus, utc_now_iso
         cleaned_name = name.strip()
         cleaned_lower = cleaned_name.lower()
+
+        # Stopword / invalid name safety check
+        invalid_words = {
+            "চলছে", "চলল", "চললো", "চলে", "অলরেডি", "আমি", "তুমি", "তুই", "সে", "তিনি",
+            "এটা", "ওটা", "সেটা", "হচ্ছে", "হলো", "হল", "হবে", "আছি", "আছে", "ছিল",
+            "কথা", "লুমি", "রোবট", "ক্যামেরা", "ছবি", "সাউন্ড"
+        }
+        if cleaned_lower in invalid_words or len(cleaned_name) < 2:
+            logger.warning(f"[_tool_memorize_person] Refusing to register invalid / stopword person name: '{cleaned_name}'")
+            return f"Invalid name '{cleaned_name}'. Cannot register this name."
 
         owner = self.get_owner()
         is_owner_target = (

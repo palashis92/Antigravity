@@ -671,7 +671,7 @@ class GeminiLiveClient:
                 }
             }
         }
-        is_extended_thinking = "extended-thinking" in self.model.lower() or "3.8" in self.model.lower()
+        is_extended_thinking = "extended-thinking" in self.model.lower()
         if is_extended_thinking:
             thinking_level = os.getenv("GEMINI_LIVE_THINKING_LEVEL", "low").lower()
             generation_config["thinkingConfig"] = {"thinkingLevel": thinking_level}
@@ -988,12 +988,19 @@ class GeminiLiveClient:
                             if txt:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
+                                if self.state and hasattr(self.state, "transition_to"):
+                                    if getattr(self.state, "current_state", None) == BehaviorState.GREETING:
+                                        logger.info("User speaking detected during GREETING. Transitioning GREETING -> LISTENING.")
+                                        self.state.transition_to(BehaviorState.LISTENING, reason="user_speaking_in_greeting")
                                 if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
-                                    logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali.")
-                                    self.inject_context(
-                                        "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
-                                        trigger_response=False
-                                    )
+                                    now_t = time.time()
+                                    if (now_t - getattr(self, "_last_asr_clarification_time", 0.0)) > 45.0:
+                                        self._last_asr_clarification_time = now_t
+                                        logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali (throttled).")
+                                        self.inject_context(
+                                            "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
+                                            trigger_response=False
+                                        )
                                 self._check_silence_command(txt)
                                 self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
@@ -1004,11 +1011,14 @@ class GeminiLiveClient:
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
                                 if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
-                                    logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock.")
-                                    self.inject_context(
-                                        "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
-                                        trigger_response=False
-                                    )
+                                    now_t = time.time()
+                                    if (now_t - getattr(self, "_last_lang_lock_time", 0.0)) > 45.0:
+                                        self._last_lang_lock_time = now_t
+                                        logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock (throttled).")
+                                        self.inject_context(
+                                            "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
+                                            trigger_response=False
+                                        )
                                 elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
                                     import re
                                     if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
@@ -1023,12 +1033,19 @@ class GeminiLiveClient:
                             if txt:
                                 logger.debug(f"🗣️  [USER]: {txt}")
                                 user_buffer.append(txt)
+                                if self.state and hasattr(self.state, "transition_to"):
+                                    if getattr(self.state, "current_state", None) == BehaviorState.GREETING:
+                                        logger.info("User speaking detected during GREETING. Transitioning GREETING -> LISTENING.")
+                                        self.state.transition_to(BehaviorState.LISTENING, reason="user_speaking_in_greeting")
                                 if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
-                                    logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali.")
-                                    self.inject_context(
-                                        "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
-                                        trigger_response=False
-                                    )
+                                    now_t = time.time()
+                                    if (now_t - getattr(self, "_last_asr_clarification_time", 0.0)) > 45.0:
+                                        self._last_asr_clarification_time = now_t
+                                        logger.info(f"User transcription contains Devanagari phonemes: '{txt}'. Reminding Gemini user is speaking Bengali (throttled).")
+                                        self.inject_context(
+                                            "[ASR CLARIFICATION: The user is speaking Bengali (বাংলা). Ambient room acoustics produced non-Bengali phonemes. Always answer in pure, natural Bengali.]",
+                                            trigger_response=False
+                                        )
                                 self._check_silence_command(txt)
                                 self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)

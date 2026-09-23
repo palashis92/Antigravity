@@ -307,6 +307,16 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         res2 = LumiBrain._extract_introduced_name("আমি কোন কথা শুনব না")
         self.assertIsNone(res2)
 
+        # Accidental false intro phrases that must NEVER match
+        self.assertIsNone(LumiBrain._extract_introduced_name("এটা চলছে"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("এটা আমি"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("এটা অলরেডি"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("ক্যামেরা দিয়ে যেটা দেখতেছো সেটা আমি নিজে"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("আমি ভাত খাব"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("আমি পাঁচ বছর ধইরা চেয়ারম্যান"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("এটা কি?"))
+        self.assertIsNone(LumiBrain._extract_introduced_name("এটা ভালো"))
+
         # Legitimate introductions
         name1, rel1 = LumiBrain._extract_introduced_name("আমি তানভীর")
         self.assertEqual(name1, "তানভীর")
@@ -315,6 +325,14 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         name2, rel2 = LumiBrain._extract_introduced_name("আমার নাম পলাশ")
         self.assertEqual(name2, "পলাশ")
         self.assertEqual(rel2, "creator")
+
+        name3, rel3 = LumiBrain._extract_introduced_name("এ হচ্ছে আমার বন্ধু সাকিব")
+        self.assertEqual(name3, "সাকিব")
+        self.assertEqual(rel3, "friend")
+
+        name4, rel4 = LumiBrain._extract_introduced_name("এটা আমার বন্ধু রাতুল")
+        self.assertEqual(name4, "রাতুল")
+        self.assertEqual(rel4, "friend")
 
     def test_gemini_3_8_live_extended_thinking_setup(self):
         """Verify setup configuration for Gemini 3.8 Live Base vs Extended Thinking."""

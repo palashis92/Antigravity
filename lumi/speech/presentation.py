@@ -163,12 +163,15 @@ class PresentationEngine:
                         )
                         with urllib.request.urlopen(req, timeout=12) as response:
                             data = json.loads(response.read().decode("utf-8"))
-                    cand = data.get("candidates", [])[0]
-                    raw_text = cand.get("content", {}).get("parts", [])[0].get("text", "")
-                    paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
-                    if len(paragraphs) >= 3:
-                        logger.info(f"Generated {len(paragraphs)} presentation segments via Gemini REST API ({sum(len(p.split()) for p in paragraphs)} words).")
-                        return paragraphs
+                        cand = data.get("candidates", [])[0]
+                        raw_text = cand.get("content", {}).get("parts", [])[0].get("text", "")
+                        paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+                        if len(paragraphs) >= 3:
+                            logger.info(f"Generated {len(paragraphs)} presentation segments via Gemini REST API ({sum(len(p.split()) for p in paragraphs)} words).")
+                            return paragraphs
+                    except Exception as e_m:
+                        logger.debug(f"Gemini REST attempt ({m}) failed: {e_m}")
+                        continue
             except Exception as e:
                 logger.debug(f"Direct Gemini REST API speech generation error: {e}")
 
