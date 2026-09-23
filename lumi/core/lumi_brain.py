@@ -1898,25 +1898,35 @@ class LumiBrain:
             if not ok:
                 return "ক্যামেরার ফ্রেম প্রসেস করতে ব্যর্থ হয়েছে।"
 
+            # Preferred modern models (gemini-2.5-flash is discontinued/deprecated by Google)
+            primary_model = os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview")
+            candidate_models = [primary_model, "gemini-3-flash-preview", "gemini-3.7-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"]
+            models_to_try = list(dict.fromkeys(candidate_models))
+
             # 1. Try modern google-genai SDK
             try:
                 from google import genai
                 from google.genai import types
 
                 client = genai.Client(api_key=api_key)
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=[
-                        types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"),
-                        "Describe this camera scene briefly in natural Bengali (2-3 sentences). Focus on what objects, persons, actions, or environment you see in front of the robot."
-                    ],
-                    config=types.GenerateContentConfig(
-                        temperature=0.4,
-                        max_output_tokens=200,
-                    ),
-                )
-                if response and response.text:
-                    return response.text.strip()
+                for model_name in models_to_try:
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=[
+                                types.Part.from_bytes(data=buf.tobytes(), mime_type="image/jpeg"),
+                                "Describe this camera scene briefly in natural Bengali (2-3 sentences). Focus on what objects, persons, actions, or environment you see in front of the robot."
+                            ],
+                            config=types.GenerateContentConfig(
+                                temperature=0.4,
+                                max_output_tokens=200,
+                                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                            ),
+                        )
+                        if response and response.text:
+                            return response.text.strip()
+                    except Exception as model_err:
+                        logger.debug(f"SDK vision model {model_name} failed: {model_err}")
             except Exception as sdk_err:
                 logger.debug(f"google-genai SDK vision call failed, trying direct REST: {sdk_err}")
 
@@ -1940,16 +1950,21 @@ class LumiBrain:
                 }
             }
             req_data = json.dumps(payload).encode("utf-8")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                res_data = json.loads(resp.read().decode("utf-8"))
-                candidates = res_data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    texts = [p.get("text", "") for p in parts if "text" in p]
-                    if texts:
-                        return "".join(texts).strip()
+
+            for model_name in models_to_try:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+                    req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        res_data = json.loads(resp.read().decode("utf-8"))
+                        candidates = res_data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            texts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
+                            if texts:
+                                return "".join(texts).strip()
+                except Exception as rest_model_err:
+                    logger.debug(f"REST vision model {model_name} failed: {rest_model_err}")
 
             return "আমি ক্যামেরা থেকে যা দেখতে পাচ্ছি তা বিস্তারিত বোঝা যাচ্ছে না।"
         except Exception as e:

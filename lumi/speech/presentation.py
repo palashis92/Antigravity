@@ -118,20 +118,28 @@ class PresentationEngine:
                 from google.genai import types
 
                 client = genai.Client(api_key=api_key)
-                resp = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        temperature=0.7,
-                        max_output_tokens=3000,
-                    ),
-                )
-                if resp and resp.text:
-                    raw_text = resp.text.strip()
-                    paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
-                    if len(paragraphs) >= 3:
-                        logger.info(f"Generated {len(paragraphs)} presentation segments via google.genai SDK ({sum(len(p.split()) for p in paragraphs)} words).")
-                        return paragraphs
+                models_to_try = [os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview"), "gemini-3-flash-preview", "gemini-3.7-flash", "gemini-flash-latest"]
+                models_to_try = list(dict.fromkeys(models_to_try))
+
+                for m in models_to_try:
+                    try:
+                        resp = client.models.generate_content(
+                            model=m,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                temperature=0.7,
+                                max_output_tokens=3000,
+                                automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                            ),
+                        )
+                        if resp and resp.text:
+                            raw_text = resp.text.strip()
+                            paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+                            if len(paragraphs) >= 3:
+                                logger.info(f"Generated {len(paragraphs)} presentation segments via google.genai SDK ({sum(len(p.split()) for p in paragraphs)} words).")
+                                return paragraphs
+                    except Exception as m_err:
+                        logger.debug(f"SDK presentation model {m} failed: {m_err}")
             except Exception as e:
                 logger.debug(f"google.genai SDK speech generation error: {e}")
 
@@ -140,19 +148,21 @@ class PresentationEngine:
                 import json
                 import urllib.request
 
-                url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-                payload = {
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {"temperature": 0.7, "maxOutputTokens": 3000},
-                }
-                req = urllib.request.Request(
-                    url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=12) as response:
-                    data = json.loads(response.read().decode("utf-8"))
+                for m in [os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview"), "gemini-3-flash-preview", "gemini-3.7-flash"]:
+                    try:
+                        url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+                        payload = {
+                            "contents": [{"parts": [{"text": prompt}]}],
+                            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 3000},
+                        }
+                        req = urllib.request.Request(
+                            url,
+                            data=json.dumps(payload).encode("utf-8"),
+                            headers={"Content-Type": "application/json"},
+                            method="POST",
+                        )
+                        with urllib.request.urlopen(req, timeout=12) as response:
+                            data = json.loads(response.read().decode("utf-8"))
                     cand = data.get("candidates", [])[0]
                     raw_text = cand.get("content", {}).get("parts", [])[0].get("text", "")
                     paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]

@@ -96,20 +96,29 @@ class ChessVision:
             from google import genai
             from google.genai import types
 
+            models_to_try = [os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview"), "gemini-3-flash-preview", "gemini-3.7-flash", "gemini-flash-latest"]
+            models_to_try = list(dict.fromkeys(models_to_try))
+
             client = genai.Client(api_key=api_key)
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
-                    self._PROMPT,
-                ],
-                config=types.GenerateContentConfig(
-                    temperature=0.1,
-                    max_output_tokens=256,
-                ),
-            )
-            if response and response.text:
-                raw = response.text.strip()
+            for m in models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=m,
+                        contents=[
+                            types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"),
+                            self._PROMPT,
+                        ],
+                        config=types.GenerateContentConfig(
+                            temperature=0.1,
+                            max_output_tokens=256,
+                            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
+                        ),
+                    )
+                    if response and response.text:
+                        raw = response.text.strip()
+                        break
+                except Exception as m_err:
+                    logger.debug(f"SDK chess model {m} failed: {m_err}")
         except Exception as sdk_err:
             logger.debug(f"google-genai SDK chess call failed, falling back to REST: {sdk_err}")
 
@@ -131,14 +140,20 @@ class ChessVision:
                 }
             }
             req_data = json.dumps(payload).encode("utf-8")
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
-            req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                res_data = json.loads(resp.read().decode("utf-8"))
-                candidates = res_data.get("candidates", [])
-                if candidates:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    raw = "".join([p.get("text", "") for p in parts if "text" in p]).strip()
+            for m in [os.getenv("GEMINI_FLASH_MODEL", "gemini-3-flash-preview"), "gemini-3-flash-preview", "gemini-3.7-flash"]:
+                try:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{m}:generateContent?key={api_key}"
+                    req = urllib.request.Request(url, data=req_data, headers={"Content-Type": "application/json"})
+                    with urllib.request.urlopen(req, timeout=12) as resp:
+                        res_data = json.loads(resp.read().decode("utf-8"))
+                        candidates = res_data.get("candidates", [])
+                        if candidates:
+                            parts = candidates[0].get("content", {}).get("parts", [])
+                            raw = "".join([p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]).strip()
+                            if raw:
+                                break
+                except Exception as rest_err:
+                    logger.debug(f"REST chess model {m} failed: {rest_err}")
         logger.debug(f"Gemini chess raw response: {raw}")
 
         # Strip markdown code fences if present
