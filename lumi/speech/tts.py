@@ -25,6 +25,21 @@ class BanglaTTS:
         if not text:
             return None
 
+        # Absolute failsafe: sanitize prohibited political slogans before any audio synthesis
+        import re
+        slogan_patterns = [
+            r"(?:জ[য়য়]\s*বা[ংঙ]লা\s*[,।\.\!\?]*\s*)?জ[য়য়]\s*ব[ঙ্গং]বন্ধু\s*[,।\.\!\?]*",
+            r"জ[য়য়]\s*বা[ংঙ]লা\s*[,।\.\!\?]*",
+            r"বা[ংঙ]লাদেশ\s*জিন্দাবাদ\s*[,।\.\!\?]*",
+            r"ইনকিলাব\s*জিন্দাবাদ\s*[,।\.\!\?]*",
+            r"\bজিন্দাবাদ\s*[,।\.\!\?]*",
+        ]
+        for pat in slogan_patterns:
+            text = re.sub(pat, " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text:
+            return None
+
         if output_path is None:
             tmp = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
             output_path = tmp.name

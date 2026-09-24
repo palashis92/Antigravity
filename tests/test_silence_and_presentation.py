@@ -377,7 +377,7 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         self.assertEqual(ext_setup["tools"][0]["functionDeclarations"][0]["behavior"], "NON_BLOCKING")
 
     def test_prompt_rules_mandate_speech_monologue_and_forbid_checkins(self):
-        """Verify LUMI system prompts explicitly forbid 'আমি কি বলতেই থাকবো?' and suspend brevity for speeches."""
+        """Verify LUMI system prompts explicitly forbid 'আমি কি বলতেই থাকবো?', suspend brevity for speeches, and ban political slogans."""
         from lumi.ai.prompts import LUMI_SYSTEM_PROMPT_BN, LUMI_SYSTEM_PROMPT_EN
 
         # Bengali prompt checks
@@ -385,17 +385,84 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         self.assertIn("আমি কি বলতেই থাকবো?", LUMI_SYSTEM_PROMPT_BN)
         self.assertIn("কঠোরভাবে ও সম্পূর্ণরূপে নিষিদ্ধ", LUMI_SYSTEM_PROMPT_BN)
         self.assertIn("৫ মিনিট কথা বলো", LUMI_SYSTEM_PROMPT_BN)
-        self.assertIn("You are a crazy conspiracist", LUMI_SYSTEM_PROMPT_BN)
-        self.assertIn("4chan", LUMI_SYSTEM_PROMPT_BN)
-        self.assertIn("infowars", LUMI_SYSTEM_PROMPT_BN)
+        
+        # Conspiracist persona must NOT be present
+        self.assertNotIn("crazy conspiracist", LUMI_SYSTEM_PROMPT_BN)
+        self.assertNotIn("4chan", LUMI_SYSTEM_PROMPT_BN)
+        self.assertNotIn("infowars", LUMI_SYSTEM_PROMPT_BN)
+
+        # Political slogans strictly banned in Bengali prompt
+        self.assertIn("STRICT BAN ON POLITICAL SLOGANS", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("জয় বাংলা", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("জয় বঙ্গবন্ধু", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("বাংলাদেশ জিন্দাবাদ", LUMI_SYSTEM_PROMPT_BN)
+        self.assertIn("Casual Conversation - Default Mode", LUMI_SYSTEM_PROMPT_BN)
 
         # English prompt checks
         self.assertIn("COMPLETELY SUSPENDED", LUMI_SYSTEM_PROMPT_EN)
         self.assertIn("Should I keep speaking?", LUMI_SYSTEM_PROMPT_EN)
         self.assertIn("STRICTLY FORBIDDEN", LUMI_SYSTEM_PROMPT_EN)
-        self.assertIn("You are a crazy conspiracist", LUMI_SYSTEM_PROMPT_EN)
-        self.assertIn("4chan", LUMI_SYSTEM_PROMPT_EN)
-        self.assertIn("infowars", LUMI_SYSTEM_PROMPT_EN)
+        self.assertNotIn("crazy conspiracist", LUMI_SYSTEM_PROMPT_EN)
+        self.assertNotIn("4chan", LUMI_SYSTEM_PROMPT_EN)
+        self.assertNotIn("infowars", LUMI_SYSTEM_PROMPT_EN)
+        self.assertIn("Strict Ban on Political Slogans", LUMI_SYSTEM_PROMPT_EN)
+        self.assertIn("জয় বাংলা", LUMI_SYSTEM_PROMPT_EN)
+        self.assertIn("জয় বঙ্গবন্ধু", LUMI_SYSTEM_PROMPT_EN)
+
+    def test_presentation_command_tightening_and_rejection_of_casual_questions(self):
+        """Verify that presentation commands require explicit formal or duration orders and reject casual questions."""
+        from lumi.ai.gemini_live import GeminiLiveClient
+
+        client = GeminiLiveClient.__new__(GeminiLiveClient)
+        client._check_silence_command = MagicMock(return_value=False)
+        client.turn_arbiter = MagicMock()
+        client.state = MagicMock()
+        client.inject_context = MagicMock()
+        client._on_presentation_requested_cb = None
+
+        # Explicit formal speech commands - MUST trigger
+        self.assertTrue(client._check_presentation_command("বক্তব্য শুরু করো"))
+        self.assertTrue(client._check_presentation_command("একটি ভাষণ দাও"))
+        self.assertTrue(client._check_presentation_command("বক্তৃতা দাও"))
+        self.assertTrue(client._check_presentation_command("give a speech"))
+        self.assertTrue(client._check_presentation_command("deliver a presentation"))
+
+        # Explicit multi-minute speech commands - MUST trigger
+        self.assertTrue(client._check_presentation_command("মুক্তিযুদ্ধ নিয়ে ৫ মিনিট কথা বলো"))
+        self.assertTrue(client._check_presentation_command("৩৬০ সেকেন্ড বলো"))
+        self.assertTrue(client._check_presentation_command("১০ মিনিট একটানা কথা বলো"))
+
+        # Casual conversational questions & inquiries - MUST NOT trigger
+        self.assertFalse(client._check_presentation_command("তোমার কি কোনো বক্তব্য আছে?"))
+        self.assertFalse(client._check_presentation_command("তোমার কি কোনো বক্তব্য আছে? বলো তো"))
+        self.assertFalse(client._check_presentation_command("তোমার বক্তব্য কি?"))
+        self.assertFalse(client._check_presentation_command("বিষয়টা একটু উপস্থাপন করো"))
+        self.assertFalse(client._check_presentation_command("AI নিয়ে কিছু বলো তো"))
+        self.assertFalse(client._check_presentation_command("রোবট সম্পর্কে বলো"))
+        self.assertFalse(client._check_presentation_command("এক মিনিট দাঁড়াও"))
+        self.assertFalse(client._check_presentation_command("এক মিনিট কথা বলো"))
+
+    def test_political_slogan_sanitizer(self):
+        """Verify that political slogans are completely stripped from text."""
+        from lumi.speech.presentation import PresentationEngine
+        from lumi.speech.tts import BanglaTTS
+
+        sample_1 = "সবাইকে আন্তরিক ধন্যবাদ। জয় বাংলা, জয় বঙ্গবন্ধু।"
+        clean_1 = PresentationEngine.sanitize_political_slogans(sample_1)
+        self.assertNotIn("জয় বাংলা", clean_1)
+        self.assertNotIn("জয় বঙ্গবন্ধু", clean_1)
+        self.assertEqual(clean_1, "সবাইকে আন্তরিক ধন্যবাদ।")
+
+        sample_2 = "সবাই ভালো থাকবেন। জয় বাংলা! বাংলাদেশ জিন্দাবাদ!"
+        clean_2 = PresentationEngine.sanitize_political_slogans(sample_2)
+        self.assertNotIn("জয় বাংলা", clean_2)
+        self.assertNotIn("বাংলাদেশ জিন্দাবাদ", clean_2)
+        self.assertEqual(clean_2, "সবাই ভালো থাকবেন।")
+
+        # Non-political mentions of 'বাংলা' must remain unharmed
+        sample_3 = "আমরা বাংলা ভাষায় কথা বলি।"
+        clean_3 = PresentationEngine.sanitize_political_slogans(sample_3)
+        self.assertEqual(clean_3, "আমরা বাংলা ভাষায় কথা বলি।")
 
     def test_continuous_speech_session_tracking_and_prompt_continuation(self):
         """Verify GeminiLiveClient manages active speech session target time and injects continuation without stopping."""
@@ -459,6 +526,9 @@ class TestLumiBrainSilenceAndPresentation(unittest.TestCase):
         self.assertIn("MANDATORY LANGUAGE ENFORCEMENT", sys_text)
         self.assertIn("বাংলা ছাড়া অন্য ভাষা সম্পূর্ণ নিষিদ্ধ", sys_text)
         self.assertIn("হিন্দি", sys_text)
+        self.assertIn("STRICT BAN ON POLITICAL SLOGANS & PARTISAN CHANTS", sys_text)
+        self.assertIn("জয় বাংলা", sys_text)
+        self.assertIn("জয় বঙ্গবন্ধু", sys_text)
 
         self.assertIn("MANDATORY LANGUAGE LOCK - BENGALI ONLY", LUMI_SYSTEM_PROMPT_BN)
         self.assertIn("কখনোই হিন্দি, স্প্যানিশ বা অন্য কোনো ভাষায় কথা বলবে না", LUMI_SYSTEM_PROMPT_BN)

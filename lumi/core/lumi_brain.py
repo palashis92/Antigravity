@@ -294,10 +294,10 @@ class LumiBrain:
         )
 
         self.tools.register("start_presentation", self._tool_start_presentation,
-            "CALL THIS TOOL when the user or Chairman asks you to give a speech, deliver a presentation, speak for a duration, or address a gathering "
-            "(e.g. '৫ মিনিট কথা বলো', '৩৬০ সেকেন্ড বলো', '৫ মিনিটের বক্তব্য দাও', 'ভাষণ দাও', 'বক্তব্য শুরু করো', 'talk for 5 minutes', 'give a speech on topic X', 'deliver a presentation'). "
-            "IMPORTANT: Never reply with short chat or counter-questions when asked to speak on a topic for a specified duration—immediately invoke this tool! "
-            "LUMI will deliver a structured, inspiring, continuous Bengali speech with expressive hand gestures.",
+            "CALL THIS TOOL ONLY when the user EXPLICITLY and unequivocally orders a formal timed speech, official lecture, or continuous presentation "
+            "(e.g. '৫ মিনিট ভাষণ দাও', '১০ মিনিট বক্তব্য রাখো', '৩৬০ সেকেন্ড একটানা বলো', 'বক্তব্য শুরু করো', 'deliver a formal presentation'). "
+            "CRITICAL: DO NOT CALL THIS TOOL for normal conversational questions, casual discussions, opinions, or requests like 'AI নিয়ে কিছু বলো' or 'রোবট সম্পর্কে বলো'. "
+            "For all casual queries, conversational chats, and general questions, answer conversationally in 1-3 sentences directly WITHOUT calling this tool!",
             {
                 "type": "object",
                 "properties": {

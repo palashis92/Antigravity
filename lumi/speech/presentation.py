@@ -74,6 +74,26 @@ class PresentationEngine:
         ]
         return any(re.search(pat, clean) for pat in stop_patterns)
 
+    @staticmethod
+    def sanitize_political_slogans(text: str) -> str:
+        """Strip all partisan political slogans (e.g. 'জয় বাংলা', 'জয় বঙ্গবন্ধু', 'বাংলাদেশ জিন্দাবাদ')."""
+        if not text:
+            return ""
+        patterns = [
+            r"(?:জ[য়য়]\s*বা[ংঙ]লা\s*[,।\.\!\?]*\s*)?জ[য়য়]\s*ব[ঙ্গং]বন্ধু\s*[,।\.\!\?]*",
+            r"জ[য়য়]\s*বা[ংঙ]লা\s*[,।\.\!\?]*",
+            r"বা[ংঙ]লাদেশ\s*জিন্দাবাদ\s*[,।\.\!\?]*",
+            r"ইনকিলাব\s*জিন্দাবাদ\s*[,।\.\!\?]*",
+            r"\bজিন্দাবাদ\s*[,।\.\!\?]*",
+        ]
+        cleaned = text
+        for pat in patterns:
+            cleaned = re.sub(pat, " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+([,।\.\!\?])", r"\1", cleaned)
+        cleaned = re.sub(r"([,।\.\!\?])\s*\1+", r"\1", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
     def generate_speech_script(
         self,
         topic: str,
@@ -106,9 +126,11 @@ class PresentationEngine:
             f"3. Cover: (a) Respectful formal greetings & importance of {topic}, (b) Foundational background & historical context, "
             f"(c) Present-day real-world situation & developments, (d) Direct positive impacts on {audience}, "
             f"(e) Specific key points ({key_points or 'practical solutions'}), (f) Practical challenges & how to overcome them, "
-            f"(g) Modern technological and social advancements, (h) Future vision & long-term goals, (i) Inspiring call to action, (j) Formal gratitude & closing blessings.\n"
+            f"(g) Modern technological and social advancements, (h) Future vision & long-term goals, (i) Inspiring call to action, "
+            f"(j) Formal gratitude & closing blessings (STRICT FORBIDDEN: NEVER include political slogans such as 'জয় বাংলা', 'জয় বঙ্গবন্ধু', 'বাংলাদেশ জিন্দাবাদ', or any party chants. End purely with civic courtesy like 'সবাইকে আন্তরিক ধন্যবাদ। খোদা হাফেজ।').\n"
             f"4. CRITICAL RULES: This is a ONE-WAY MONOLOGUE. Do NOT ask any questions back to the audience. Do NOT write short summaries. "
-            f"Do NOT include stage directions, bullet points, asterisks, or markdown formatting. Output ONLY the pure spoken Bengali text."
+            f"Do NOT include stage directions, bullet points, asterisks, or markdown formatting. Output ONLY the pure spoken Bengali text.\n"
+            f"5. POLITICAL NEUTRALITY & SLOGAN BAN: Under NO circumstances include partisan political slogans (STRICTLY FORBIDDEN: 'জয় বাংলা', 'জয় বঙ্গবন্ধু', 'বাংলাদেশ জিন্দাবাদ', or any political slogan). Conclude strictly with neutral, warm civic gratitude and well-wishes."
         )
 
         if api_key:
@@ -134,7 +156,8 @@ class PresentationEngine:
                         )
                         if resp and resp.text:
                             raw_text = resp.text.strip()
-                            paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+                            paragraphs = [self.sanitize_political_slogans(p) for p in raw_text.split("\n\n") if p.strip()]
+                            paragraphs = [p for p in paragraphs if p]
                             if len(paragraphs) >= 3:
                                 logger.info(f"Generated {len(paragraphs)} presentation segments via google.genai SDK ({sum(len(p.split()) for p in paragraphs)} words).")
                                 return paragraphs
@@ -165,7 +188,8 @@ class PresentationEngine:
                             data = json.loads(response.read().decode("utf-8"))
                         cand = data.get("candidates", [])[0]
                         raw_text = cand.get("content", {}).get("parts", [])[0].get("text", "")
-                        paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+                        paragraphs = [self.sanitize_political_slogans(p) for p in raw_text.split("\n\n") if p.strip()]
+                        paragraphs = [p for p in paragraphs if p]
                         if len(paragraphs) >= 3:
                             logger.info(f"Generated {len(paragraphs)} presentation segments via Gemini REST API ({sum(len(p.split()) for p in paragraphs)} words).")
                             return paragraphs
@@ -190,7 +214,8 @@ class PresentationEngine:
                 )
                 if resp and resp.choices:
                     raw_text = resp.choices[0].message.content.strip()
-                    paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+                    paragraphs = [self.sanitize_political_slogans(p) for p in raw_text.split("\n\n") if p.strip()]
+                    paragraphs = [p for p in paragraphs if p]
                     if len(paragraphs) >= 3:
                         logger.info(f"Generated {len(paragraphs)} presentation segments via OpenAI ({sum(len(p.split()) for p in paragraphs)} words).")
                         return paragraphs
@@ -304,7 +329,7 @@ class PresentationEngine:
             # Full 11 paragraphs for 5+ minutes
             chosen = all_pool
 
-        return chosen
+        return [self.sanitize_political_slogans(p) for p in chosen]
 
     def start_presentation(
         self,
@@ -428,7 +453,10 @@ class PresentationEngine:
                         elif hasattr(self.gestures, "play_conversational_step"):
                             self.gestures.play_async(self.gestures.play_conversational_step, name=f"pres_step_{idx}")
 
-                    audio_path = self.tts.synthesize(text)
+                    clean_text = self.sanitize_political_slogans(text)
+                    if not clean_text:
+                        continue
+                    audio_path = self.tts.synthesize(clean_text)
                     if self._stop_requested:
                         break
 

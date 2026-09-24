@@ -294,9 +294,15 @@ class GeminiLiveClient:
             norm = norm.replace(d, e)
         norm_lower = norm.lower()
 
+        # Reject casual inquiries or questions asking what the opinion/statement is
+        if re.search(r"(?:বক্তব্য|মতামত|উপস্থাপন|বক্তৃতা)\s*(?:কী|কি|কেমন|আছে\s*কিনা|আছে\s*কি)", norm_lower):
+            return False
+        if re.search(r"(?:তোমার|কারো)\s*(?:কি|কী)?\s*(?:কোনো|কোন)?\s*(?:বক্তব্য|মতামত)\s*আছে", norm_lower):
+            return False
+
         # Match seconds and minutes
         sec_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:সেকেন্ড(?:ের|ে)?|सेकंड|sec(?:ond)?s?)", norm_lower)
-        min_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:মিনিট(?:ের|ে)?|मिनट|min(?:ute)?s?)", norm_lower)
+        min_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:মিনিট(?:ের|ে)?|मिनট|min(?:ute)?s?)", norm_lower)
 
         duration = None
         if sec_match:
@@ -314,30 +320,39 @@ class GeminiLiveClient:
         elif any(w in norm_lower for w in ["এক মিনিট", "ek minute", "one minute", "1 min", "एक मिनट"]):
             duration = 1.0
 
-        speech_verbs = [
-            "বক্তব্য", "ভাষণ", "বক্তৃতা", "উপস্থাপন", "লেকচার", "আলোচনা",
-            "কথা বল", "কথা বলো", "কথা বলুন", "কথা বলবি", "কথা বলতে", "কথা বলবো", "কথা বলব", "কথা বলবা",
-            "বলো", "বলুন", "বলব", "বলবো", "কিছু বল", "কিছু বলো", "একটানা বল", "একটানা বলো",
-            "ননস্টপ", "nonstop", "লাগাতার", "লগাতার",
-            "बात करें", "बात करो", "लगातार",
-            "katha bolo", "kotha bolo", "katha bol", "kotha bol", "katha bolun", "kotha bolun",
-            "katha bolte", "kotha bolte", "kotha", "katha", "bolo", "bolun", "kichu bolo",
-            "boktobbo", "bhashon", "vashon",
-            "speech", "presentation", "lecture", "talk", "speak"
+        formal_speech_patterns = [
+            r"বক্তব্য\s*(?:শুরু\s*কর(?:ো|ুন)|দাও|দিন|রাখ(?:ো|ুন))",
+            r"ভাষণ\s*(?:শুরু\s*কর(?:ো|ুন)|দাও|দিন|রাখ(?:ো|ুন))",
+            r"বক্তৃতা\s*(?:শুরু\s*কর(?:ো|ুন)|দাও|দিন|রাখ(?:ো|ুন))",
+            r"প্রেজেন্টেশন\s*(?:শুরু\s*কর(?:ো|ুন)|দাও|দিন)",
+            r"(?:give|deliver|start)\s*(?:a\s*)?(?:speech|presentation|lecture)",
+            r"(?:speech|presentation)\s*deliver",
         ]
-        has_speech_intent = any(w in norm_lower for w in speech_verbs)
-
-        speech_nouns = ["বক্তব্য", "ভাষণ", "বক্তৃতা", "উপস্থাপন", "speech", "presentation", "lecture", "boktobbo", "bhashon"]
-        action_words = ["দাও", "দিন", "শুরু", "বল", "কর", "give", "deliver", "start"]
-        has_speech_word = any(w in norm_lower for w in speech_nouns)
-        has_action_word = any(w in norm_lower for w in action_words)
+        has_formal_speech_cmd = any(re.search(pat, norm_lower) for pat in formal_speech_patterns)
 
         is_presentation = False
-        if duration is not None and has_speech_intent:
+        if has_formal_speech_cmd:
             is_presentation = True
-        elif has_speech_word and has_action_word:
-            is_presentation = True
-            duration = 3.0
+            if duration is None:
+                duration = 3.0
+        elif duration is not None:
+            # Explicit timed speech command: e.g. "৫ মিনিট কথা বলো", "৩৬০ সেকেন্ড বলো", "talk for 5 minutes"
+            if duration >= 2.0:
+                speech_verbs = [
+                    "কথা বল", "কথা বলো", "কথা বলুন", "কথা বলতে", "কথা বলবো", "কথা বলব",
+                    "বলো", "বলুন", "বলব", "বলবো", "একটানা", "ননস্টপ", "nonstop", "লাগাতার",
+                    "speech", "presentation", "lecture", "talk", "speak"
+                ]
+                if any(w in norm_lower for w in speech_verbs):
+                    is_presentation = True
+            else:
+                # For short durations (<= 1 min), require explicit formal or continuous speech keyword
+                short_speech_keywords = [
+                    "বক্তব্য", "ভাষণ", "বক্তৃতা", "লেকচার", "একটানা", "ননস্টপ", "লাগাতার",
+                    "speech", "presentation", "lecture"
+                ]
+                if any(w in norm_lower for w in short_speech_keywords):
+                    is_presentation = True
 
         if not is_presentation or duration is None:
             return False
@@ -428,6 +443,8 @@ class GeminiLiveClient:
             f"[MANDATORY CONTINUOUS SPEECH DIRECTIVE: {duration:.1f}-MINUTE SPEECH ON '{topic}']:\n"
             f"Deliver an uninterrupted, comprehensive monologue directly in your voice for the full {duration:.1f} minutes (~{int(duration*120)} words). "
             f"Do NOT stop after 1 minute! NEVER ask 'আমি কি বলতেই থাকবো?', 'আমি কি আরো বলব?', or any check-in questions! "
+            f"STRICT BAN ON POLITICAL SLOGANS: Under NO circumstances use political slogans such as 'জয় বাংলা', 'জয় বঙ্গবন্ধু', 'বাংলাদেশ জিন্দাবাদ', or any party slogans! "
+            f"Conclude strictly with neutral, warm civic courtesy (e.g. 'ধন্যবাদ সবাইকে', 'সবাই ভালো থাকবেন', 'খোদা হাফেজ'). "
             f"Speak continuously with deep analysis, historical background, real-world examples, and inspiring vision."
         )
         if hasattr(self, "inject_context") and callable(self.inject_context):
@@ -651,6 +668,13 @@ class GeminiLiveClient:
             "   (d) Present-day relevance, lessons, and impacts on society,\n"
             "   (e) Future vision and inspiring call-to-action.\n"
             "Speak continuously with natural cadence, authority, and emotional depth without pausing for user confirmation until the full duration has elapsed."
+        )
+
+        instructions += (
+            "\n\n[STRICT BAN ON POLITICAL SLOGANS & PARTISAN CHANTS]:\n"
+            "1. You are strictly non-partisan and apolitical. Under NO circumstances should you EVER utter or write political slogans, chants, or party mottos.\n"
+            "2. STRICTLY FORBIDDEN: NEVER say 'জয় বাংলা', 'জয় বঙ্গবন্ধু', 'বাংলাদেশ জিন্দাবাদ', or any political/partisan slogan under any circumstances, especially when concluding speeches or presentations!\n"
+            "3. Conclude all speeches, presentations, and remarks strictly with neutral, warm civic courtesy (e.g. 'সবাইকে আন্তরিক ধন্যবাদ', 'সবাই ভালো থাকবেন', 'খোদা হাফেজ')."
         )
 
         instructions += (
@@ -1002,7 +1026,6 @@ class GeminiLiveClient:
                                             trigger_response=False
                                         )
                                 self._check_silence_command(txt)
-                                self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
                         if "outputAudioTranscription" in content:
                             txt = _get_text(content['outputAudioTranscription'])
@@ -1010,7 +1033,14 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
-                                if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
+                                import re
+                                if re.search(r"(?:জ[য়য়]\s*বা[ংঙ]লা|জ[য়য়]\s*ব[ঙ্গং]বন্ধু|জিন্দাবাদ)", txt):
+                                    logger.warning(f"Detected prohibited political slogan in LUMI output draft: '{txt}'. Reminding neutrality.")
+                                    self.inject_context(
+                                        "[CRITICAL POLITICAL BAN: Political slogans like 'জয় বাংলা' and 'জয় বঙ্গবন্ধু' are STRICTLY FORBIDDEN! Immediately stop using any political slogans and conclude neutrally with 'ধন্যবাদ সবাইকে' or 'খোদা হাফেজ'.]",
+                                        trigger_response=False
+                                    )
+                                elif any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
                                     now_t = time.time()
                                     if (now_t - getattr(self, "_last_lang_lock_time", 0.0)) > 45.0:
                                         self._last_lang_lock_time = now_t
@@ -1020,7 +1050,6 @@ class GeminiLiveClient:
                                             trigger_response=False
                                         )
                                 elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
-                                    import re
                                     if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
                                         logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
                                         self.inject_context(
@@ -1047,7 +1076,6 @@ class GeminiLiveClient:
                                             trigger_response=False
                                         )
                                 self._check_silence_command(txt)
-                                self._check_presentation_command(txt)
                                 self._check_eager_recall(txt)
                         if "outputTranscription" in content:
                             txt = _get_text(content['outputTranscription'])
@@ -1055,14 +1083,20 @@ class GeminiLiveClient:
                             if txt and (not lumi_buffer or txt not in lumi_buffer[-1]):
                                 logger.debug(f"🤖 [LUMI]: {txt}")
                                 lumi_buffer.append(txt)
-                                if any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
+                                import re
+                                if re.search(r"(?:জ[য়য়]\s*বা[ংঙ]লা|জ[য়য়]\s*ব[ঙ্গং]বন্ধু|জিন্দাবাদ)", txt):
+                                    logger.warning(f"Detected prohibited political slogan in LUMI output draft: '{txt}'. Reminding neutrality.")
+                                    self.inject_context(
+                                        "[CRITICAL POLITICAL BAN: Political slogans like 'জয় বাংলা' and 'জয় বঙ্গবন্ধু' are STRICTLY FORBIDDEN! Immediately stop using any political slogans and conclude neutrally with 'ধন্যবাদ সবাইকে' or 'খোদা হাফেজ'.]",
+                                        trigger_response=False
+                                    )
+                                elif any('\u0900' <= char <= '\u097f' and char not in ('\u0964', '\u0965') for char in txt):
                                     logger.warning(f"Detected Hindi/Devanagari in LUMI draft: '{txt}'. Nudging Bengali lock.")
                                     self.inject_context(
                                         "[CRITICAL LANGUAGE LOCK: Hindi is STRICTLY FORBIDDEN! Immediately switch and speak ONLY in pure, natural Bengali (বাংলা)!]",
                                         trigger_response=False
                                     )
                                 elif getattr(self, "_active_speech_target_end", 0.0) > time.time():
-                                    import re
                                     if re.search(r"(?:আমি\s*কি\s*(?:বলতেই|বলতে|আরো|আরও)\s*থাকব|আমি\s*কি\s*(?:আরো|আরও)\s*বলব)", txt):
                                         logger.warning(f"Detected check-in phrase in speech: '{txt}'. Nudging continuous monologue.")
                                         self.inject_context(
@@ -1104,6 +1138,7 @@ class GeminiLiveClient:
                                     f"[CONTINUOUS SPEECH SESSION: {rem_sec} SECONDS REMAINING]:\n"
                                     f"Continue your spoken monologue on '{self._active_speech_topic}' immediately! "
                                     f"Do not stop and NEVER ask 'আমি কি বলতেই থাকবো?' or any check-in questions. "
+                                    f"STRICT BAN ON POLITICAL SLOGANS: Under NO circumstances say 'জয় বাংলা', 'জয় বঙ্গবন্ধু', 'বাংলাদেশ জিন্দাবাদ', or any political slogan! "
                                     f"Seamlessly transition into the next chapter: present-day impact, real-world examples, future vision, and inspiring concluding thoughts. "
                                     f"Speak continuously with rich, eloquent Bengali sentences without waiting for the user!"
                                 )
