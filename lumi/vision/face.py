@@ -31,6 +31,61 @@ from enum import Enum
 logger = get_logger("vision.face")
 
 
+def _compute_iou(box1: Tuple[int, int, int, int], box2: Tuple[int, int, int, int]) -> float:
+    """Compute Intersection-over-Union (IoU) of two bounding boxes (x, y, w, h)."""
+    x1, y1, w1, h1 = box1
+    x2, y2, w2, h2 = box2
+
+    xi1 = max(x1, x2)
+    yi1 = max(y1, y2)
+    xi2 = min(x1 + w1, x2 + w2)
+    yi2 = min(y1 + h1, y2 + h2)
+
+    inter_w = max(0, xi2 - xi1)
+    inter_h = max(0, yi2 - yi1)
+    inter_area = inter_w * inter_h
+
+    box1_area = w1 * h1
+    box2_area = w2 * h2
+    union_area = box1_area + box2_area - inter_area
+    if union_area <= 0:
+        return 0.0
+    return inter_area / union_area
+
+
+def _is_valid_face_crop(frame_gray: Any, x: int, y: int, w: int, h: int) -> bool:
+    """Validate geometric and photometric properties of face candidate to eliminate false positives."""
+    if w <= 0 or h <= 0:
+        return False
+    # 1. Aspect ratio: human faces are roughly vertical-elongated or square (0.75 <= h/w <= 1.40)
+    aspect_ratio = h / float(w)
+    if aspect_ratio < 0.75 or aspect_ratio > 1.40:
+        return False
+
+    # 2. Minimum dimension
+    if w < 65 or h < 65:
+        return False
+
+    # 3. Brightness and variance checks (reject pitch black darkness and flat monochrome patches)
+    if hasattr(frame_gray, "shape"):
+        try:
+            crop = frame_gray[y : y + h, x : x + w]
+            if crop.size == 0:
+                return False
+            import numpy as np
+
+            mean_val = float(np.mean(crop))
+            if mean_val < 25.0:  # Pitch black background / dark room noise
+                return False
+            std_val = float(np.std(crop))
+            if std_val < 18.0:  # Completely uniform darkness or flat texture
+                return False
+        except Exception:
+            pass
+
+    return True
+
+
 class IdentityState(str, Enum):
     UNKNOWN = "UNKNOWN"
     LOW_CONFIDENCE = "LOW_CONFIDENCE"
@@ -54,7 +109,7 @@ class DetectedFace:
 class FaceRecognitionService:
     """Detects and identifies faces, retrieving memory profiles and triggering consent workflows."""
 
-    def __init__(self, memory_manager: MemoryManager, recognition_threshold: float = 0.45) -> None:
+    def __init__(self, memory_manager: MemoryManager, recognition_threshold: float = 0.40) -> None:
         self.memory = memory_manager
         env_thresh = os.getenv("LUMI_FACE_RECOGNITION_THRESHOLD")
         if env_thresh:
@@ -77,7 +132,7 @@ class FaceRecognitionService:
         self._next_track_id: int = 0
         self._recognition_buffer: Dict[str, List[str]] = {}  # alias for backward compat
         self._buffer_size = 5  # 5 frames buffer (~0.75s)
-        self._min_votes = 2    # At least 2 votes needed to confirm
+        self._min_votes = 3    # At least 3 votes needed to confirm identity (robust consensus)
         self._frame_counter = 0
         self._last_confirmed_faces: List[DetectedFace] = []
         self._last_recognition_time: float = 0.0
@@ -155,15 +210,22 @@ class FaceRecognitionService:
                 return self._simulate_face_detection(frame)
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = face_cascade.detectMultiScale(
-                gray, scaleFactor=1.1, minNeighbors=5, minSize=(50, 50)
+            raw_faces = face_cascade.detectMultiScale(
+                gray, scaleFactor=1.1, minNeighbors=8, minSize=(80, 80)
             )
+
+            # Filter raw candidates through geometry and luminance sanity checks
+            faces = [
+                (int(x), int(y), int(w), int(h))
+                for (x, y, w, h) in raw_faces
+                if _is_valid_face_crop(gray, int(x), int(y), int(w), int(h))
+            ]
 
             if len(faces) == 0:
                 return []
 
             now = time.time()
-            # Fast path check: if all detected faces have fresh recognized track caches, skip heavy ResNet
+            # Fast path check: if all detected faces have fresh recognized track caches with high IoU, skip heavy ResNet
             all_cached = True
             cached_faces = []
             with self._track_lock:
@@ -171,14 +233,22 @@ class FaceRecognitionService:
                     cx = x + w / 2.0
                     cy = y + h / 2.0
                     best_cached = None
-                    min_d = 120.0
+                    best_iou = 0.0
+
                     for tid, tdata in self._tracks.items():
-                        if (now - tdata.get("last_seen_time", 0.0)) <= 2.5:
-                            tcx, tcy = tdata["center"]
-                            d = math.hypot(cx - tcx, cy - tcy)
-                            if d < min_d:
-                                min_d = d
-                                best_cached = tdata.get("cached_face")
+                        if (now - tdata.get("last_seen_time", 0.0)) <= 1.5:
+                            tbox = tdata.get("box")
+                            if tbox:
+                                iou = _compute_iou((x, y, w, h), tbox)
+                                if iou > best_iou:
+                                    best_iou = iou
+                                    if iou >= 0.40:
+                                        best_cached = tdata.get("cached_face")
+                            else:
+                                tcx, tcy = tdata["center"]
+                                if math.hypot(cx - tcx, cy - tcy) < min(60.0, w * 0.4):
+                                    best_cached = tdata.get("cached_face")
+
                     if best_cached is not None and (now - self._last_recognition_time) < self._min_recognition_interval:
                         cached_faces.append(
                             DetectedFace(
@@ -240,23 +310,30 @@ class FaceRecognitionService:
                         best_dist = float(distances[best_match_index])
                         best_person = all_known_candidates[best_match_index][0]
 
-                        if best_dist <= self.recognition_threshold:
+                        # Margin check against candidates of different persons
+                        other_dists = [
+                            distances[i] for i, c in enumerate(all_known_candidates)
+                            if c[0].id != best_person.id
+                        ]
+                        second_best_dist = float(min(other_dists)) if other_dists else 1.0
+                        margin = second_best_dist - best_dist
+
+                        if best_dist <= self.recognition_threshold and margin >= 0.06:
                             matched_person = best_person
                             is_known = True
                             identity_state = IdentityState.RECOGNIZED
                             confidence = max(0.70, min(0.99, 1.0 - (best_dist / (self.recognition_threshold * 2.0))))
                             logger.info(
                                 f"[MATCH] person_id={matched_person.id} name='{matched_person.name}' "
-                                f"distance={best_dist:.3f} confidence={confidence:.2f} (RECOGNIZED)"
+                                f"distance={best_dist:.3f} margin={margin:.3f} confidence={confidence:.2f} (RECOGNIZED)"
                             )
-                        elif best_dist <= (self.recognition_threshold + 0.07):
+                        elif best_dist <= (self.recognition_threshold + 0.05):
                             matched_person = best_person
                             is_known = False
                             identity_state = IdentityState.LOW_CONFIDENCE
                             confidence = 0.50
                             logger.debug(
-                                f"[MATCH] Borderline distance={best_dist:.3f} for '{best_person.name}' "
-                                f"(thresh={self.recognition_threshold}) (LOW_CONFIDENCE)"
+                                f"[MATCH] Borderline/ambiguous distance={best_dist:.3f} margin={margin:.3f} for '{best_person.name}' (LOW_CONFIDENCE)"
                             )
                         else:
                             identity_state = IdentityState.UNKNOWN
@@ -315,28 +392,39 @@ class FaceRecognitionService:
 
             for face in faces:
                 best_track_id = None
-                min_dist = 140.0  # max pixels a face moves between 0.15s frames
+                best_iou = 0.0
+                min_dist = 80.0
 
                 for tid, tdata in list(self._tracks.items()):
                     if (now - tdata["last_seen_time"]) > 1.5:
                         continue
-                    tcx, tcy = tdata["center"]
-                    dist = math.hypot(face.center[0] - tcx, face.center[1] - tcy)
-                    if dist < min_dist:
-                        min_dist = dist
-                        best_track_id = tid
+                    tbox = tdata.get("box")
+                    if tbox:
+                        iou = _compute_iou(face.bounding_box, tbox)
+                        if iou > best_iou:
+                            best_iou = iou
+                            if iou >= 0.35:
+                                best_track_id = tid
+                    else:
+                        tcx, tcy = tdata["center"]
+                        dist = math.hypot(face.center[0] - tcx, face.center[1] - tcy)
+                        if dist < min_dist:
+                            min_dist = dist
+                            best_track_id = tid
 
                 if best_track_id is None:
                     self._next_track_id += 1
                     best_track_id = self._next_track_id
                     self._tracks[best_track_id] = {
                         "center": face.center,
+                        "box": face.bounding_box,
                         "last_seen_time": now,
                         "history": [],
                     }
 
                 track = self._tracks[best_track_id]
                 track["center"] = face.center
+                track["box"] = face.bounding_box
                 track["last_seen_time"] = now
 
                 # Record vote in track history: (person_id, person_name, person_obj)

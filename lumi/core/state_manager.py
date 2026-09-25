@@ -60,6 +60,16 @@ TRANSIENT_STATES: Set[BehaviorState] = {
     BehaviorState.SEARCHING,
 }
 
+# Per-state timeouts for transient watchdog recovery
+STATE_TIMEOUTS: Dict[BehaviorState, float] = {
+    BehaviorState.GREETING: 15.0,
+    BehaviorState.THINKING: 30.0,
+    BehaviorState.LISTENING: 45.0,
+    BehaviorState.VISION_ANALYSIS: 30.0,
+    BehaviorState.CHESS_ANALYSIS: 30.0,
+    BehaviorState.SEARCHING: 30.0,
+}
+
 
 # Valid state transitions matrix
 VALID_TRANSITIONS: Dict[BehaviorState, Set[BehaviorState]] = {
@@ -272,7 +282,7 @@ class StateManager:
                 logger.error(f"Error in state listener {listener}: {e}", exc_info=True)
 
     def check_watchdog(self, now: Optional[float] = None, timeout_s: float = 15.0) -> bool:
-        """Check if current state is a transient state that has exceeded timeout_s.
+        """Check if current state is a transient state that has exceeded timeout.
         
         If stuck, automatically forces transition to IDLE and emits TEL-04 telemetry.
         Returns True if a watchdog recovery was triggered.
@@ -280,11 +290,16 @@ class StateManager:
         current_time = now if now is not None else time.time()
         with self._lock:
             if self._current_state in TRANSIENT_STATES:
+                # Use specific state timeout if defined, falling back to timeout_s
+                state_timeout = STATE_TIMEOUTS.get(self._current_state, timeout_s)
+                if timeout_s != 15.0:
+                    state_timeout = timeout_s
+
                 elapsed = current_time - self._state_entered_time
-                if elapsed >= timeout_s:
+                if elapsed >= state_timeout:
                     stuck_state = self._current_state
                     logger.warning(
-                        f"⚠️ [WATCHDOG] State '{stuck_state.value}' stuck for {elapsed:.1f}s (>{timeout_s}s). "
+                        f"⚠️ [WATCHDOG] State '{stuck_state.value}' stuck for {elapsed:.1f}s (>{state_timeout}s). "
                         "Auto-recovering to IDLE."
                     )
                     try:

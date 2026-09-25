@@ -60,11 +60,11 @@ class AnjumCompanionEngine:
             "চলো আমরা গুনি! বলো তো ১! ১ এর পর কি?",
         ]
 
-        self._animal_prompts = [
-            "আঞ্জুম! বিড়াল কেমন করে ডাকে বলতো? মিউ মিউ! তুমি একবার ডাকো তো!",
-            "আঞ্জুম সোনা! কুকুর কেমন করে ডাকে বলতো? ঘেউ ঘেউ! তুমি ডাকো তো!",
-            "পাখি কেমন করে গান গায় বলতো আঞ্জুম? কিচিরমিচির!",
-            "গরু কেমন করে ডাকে বলতো? হাম্বা হাম্বা!",
+        self._playful_prompts = [
+            "আঞ্জুম! আজকে তুমি কি খেলা খেলেছো সোনা?",
+            "আঞ্জুম সোনা! আমাকে তোমার পছন্দের একটা গল্প শোনাও না!",
+            "আঞ্জুম! তোমার প্রিয় রং কি বলতো?",
+            "আঞ্জুম সোনা! তুমি আজকে কি কি মজার কাজ করেছো?",
         ]
 
         self._rhyme_prompts = [
@@ -109,6 +109,12 @@ class AnjumCompanionEngine:
         """Mark that Anjum's face is currently visible in camera."""
         self.last_seen_time = now or time.time()
 
+    def mark_speech_activity(self, now: Optional[float] = None) -> None:
+        """Mark that speech was heard, resetting stimulus cooldown and unanswered counter."""
+        current = now or time.time()
+        self.last_stimulus_time = current
+        self.unanswered_prompt_count = 0
+
     def is_timeout(self, now: Optional[float] = None, timeout_sec: float = 10.0) -> bool:
         """Check if Anjum has not been seen for longer than timeout_sec."""
         current = now or time.time()
@@ -126,10 +132,10 @@ class AnjumCompanionEngine:
         self.last_stimulus_time = current
         self._last_prompt_time = current
 
-        # Adaptive pacing: if 2 or more prompts went unanswered, switch to lower-effort stimulus (animal/fun)
+        # Adaptive pacing: if 2 or more prompts went unanswered, switch to lower-effort stimulus (playful/calm)
         if self.unanswered_prompt_count >= 2:
             self.engagement_level = "calm"
-            stimulus = random.choice(self._animal_prompts)
+            stimulus = random.choice(self._playful_prompts)
         else:
             stimulus = self._get_next_stimulus()
 
@@ -142,7 +148,7 @@ class AnjumCompanionEngine:
         if self._stimulus_index == 0:
             return random.choice(self._counting_prompts)
         elif self._stimulus_index == 1:
-            return random.choice(self._animal_prompts)
+            return random.choice(self._playful_prompts)
         elif self._stimulus_index == 2:
             return random.choice(self._identity_and_action_prompts)
         else:

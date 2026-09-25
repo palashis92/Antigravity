@@ -47,3 +47,8 @@ data/
 custom_data/
 .agents/
 
+# Audio assets generated at runtime
+lumi/assets/animals/*.wav
+lumi/assets/animals/*.mp3
+lumi/assets/animals/*.ogg
+

@@ -186,14 +186,6 @@ class LumiBrain:
                 "description": {"type": "string", "description": "Optional details about the reminder."}
             },
             "required": ["title", "remind_at_iso"]
-        })
-        self.tools.register("show_animal_animation", self._tool_show_animal_animation, "Show an animal animation/image on your screen. Call this when the user asks how an animal sounds or acts, while SIMULTANEOUSLY using your voice to mimic the animal sound.", {
-            "type": "object",
-            "properties": {
-                "animal": {"type": "string", "description": "The name of the animal (e.g. cat, dog, bird)."}
-            },
-            "required": ["animal"]
-        })
         self.tools.register("send_email", self._tool_send_email, "Send an email.", {
             "type": "object", "properties": {"to_address": {"type": "string"}, "subject": {"type": "string"}, "message": {"type": "string"}}, "required": ["to_address", "subject", "message"]
         })
@@ -808,11 +800,11 @@ class LumiBrain:
                         if stimulus:
                             logger.info(f"Proactive Anjum stimulus: {stimulus}")
                             self.eyes.set_expression("excited")
-                            audio_path = self.tts.synthesize(stimulus)
-                            if audio_path:
-                                self.speaker.play_file(audio_path, block=False)
                             if hasattr(self.realtime_voice, "inject_context"):
-                                self.realtime_voice.inject_context(f"[PROACTIVE CHILD PROMPT SPOKEN: '{stimulus}']")
+                                self.realtime_voice.inject_context(
+                                    f"[Child is quiet. Say warmly and simply in Bengali to encourage Anjum: '{stimulus}']",
+                                    trigger_response=True,
+                                )
 
             time.sleep(0.05)
 
@@ -1003,35 +995,10 @@ class LumiBrain:
                         logger.debug(f"Silence wake check STT error: {e}")
                 return
 
-            # If Anjum Mode is active, handle speech with speech-therapy companion logic
+            # If Anjum Mode is active, mark speech activity to reset stimulus cooldown
             if self.state.current_state == BehaviorState.ANJUM_MODE:
-                if hasattr(self, "stt"):
-                    try:
-                        text = self.stt.transcribe_pcm_bytes(audio_bytes)
-                        if text:
-                            logger.info(f"👧 Anjum utterance transcribed: '{text}'")
-                            reply = self.anjum_companion.handle_anjum_speech(text)
-                            if reply:
-                                self.eyes.set_expression("excited")
-                                audio_path = self.tts.synthesize(reply)
-                                if audio_path:
-                                    self.speaker.play_file(audio_path, block=False)
-                                if hasattr(self.realtime_voice, "inject_context"):
-                                    self.realtime_voice.inject_context(
-                                        f"[CHILD SPOKE: '{text}'. LUMI REPLIED ENTHUSIASTICALLY: '{reply}']"
-                                    )
-                                return
-                        else:
-                            # Closed-loop reinforcement: child made vocal sounds that STT could not transcribe
-                            reply = self.anjum_companion.handle_vocalization_detected(duration_s=duration)
-                            if reply:
-                                self.eyes.set_expression("excited")
-                                audio_path = self.tts.synthesize(reply)
-                                if audio_path:
-                                    self.speaker.play_file(audio_path, block=False)
-                                return
-                    except Exception as e:
-                        logger.debug(f"Anjum speech handling error: {e}")
+                self.anjum_companion.mark_speech_activity(time.time())
+                self.eyes.set_expression("excited")
                 return
 
             if not self.speaker_id.is_available():
@@ -1367,7 +1334,7 @@ class LumiBrain:
 
         # Check for Anjum (Speech-Therapy & Companion Mode)
         name_lower = face.person.name.lower().strip() if (face.is_known and face.person) else ""
-        is_anjum = "anjum" in name_lower or "আঞ্জুম" in name_lower
+        is_anjum = ("anjum" in name_lower or "আঞ্জুম" in name_lower) and face.is_known and getattr(face, "identity_state", None) == IdentityState.RECOGNIZED
 
         if is_anjum:
             self._anjum_consecutive_frames += 1
@@ -1376,9 +1343,11 @@ class LumiBrain:
             self._last_face_seen_time = now_t
             self.anjum_companion.mark_seen(now_t)
             self.active_person = face.person
-            # Require 3 consecutive confirmed frames before entering ANJUM_MODE to prevent false triggers
-            if self.state.current_state != BehaviorState.ANJUM_MODE and self._anjum_consecutive_frames >= 3:
-                self._enter_anjum_mode()
+            # Require 6 consecutive confirmed frames before entering ANJUM_MODE to prevent false triggers
+            if self.state.current_state != BehaviorState.ANJUM_MODE and self._anjum_consecutive_frames >= 6:
+                is_speaking = now_t < getattr(self.realtime_voice, "_speaker_active_until", 0.0)
+                if not is_speaking:
+                    self._enter_anjum_mode()
             return
         else:
             self._anjum_consecutive_frames = 0
@@ -1400,11 +1369,7 @@ class LumiBrain:
                     self.anjum_companion.mark_seen(now_t)
                     return
             else:
-                # Unknown face in Anjum mode maintains presence
-                now_t = time.time()
-                self._last_anjum_seen_time = now_t
-                self._last_face_seen_time = now_t
-                self.anjum_companion.mark_seen(now_t)
+                # In Anjum mode, an unknown or unconfirmed face does not reset timeout
                 return
 
         if face.is_known and face.person is not None:
@@ -2526,115 +2491,8 @@ class LumiBrain:
 
 
     def _tool_show_animal_animation(self, animal: str) -> str:
-        """Shows an animal animation on the screen and plays the ACTUAL animal sound from the speaker. DO NOT use TTS to mimic the sound yourself (e.g. do not say "Meow" or "Woof"). Just say something natural like "Here it is!" or "Look at this!"."""
-        import os
-        import urllib.request
-        from PIL import Image
-        
+        """Shows an animal animation on the screen using procedural eyes display."""
         animal_lower = animal.lower().strip()
-        assets_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "animals")
-        os.makedirs(assets_dir, exist_ok=True)
-        
-        # Audio playback (if user provided real MP3s/WAVs/OGGs, play them)
-        audio_path = os.path.join(assets_dir, f"{animal_lower}.mp3")
-        wav_path = os.path.join(assets_dir, f"{animal_lower}.wav")
-        ogg_path = os.path.join(assets_dir, f"{animal_lower}.ogg")
-        audio_found = False
-        if os.path.exists(audio_path):
-            self.speaker.play_audio_file(audio_path, block=False)
-            audio_found = True
-        elif os.path.exists(ogg_path):
-            self.speaker.play_audio_file(ogg_path, block=False)
-            audio_found = True
-        elif os.path.exists(wav_path):
-            self.speaker.play_audio_file(wav_path, block=False)
-            audio_found = True
-        
-        # Synthesize audio if missing
-        if not audio_found:
-            try:
-                import wave, math, struct, random
-                try:
-                    from .assets.animal_registry import ANIMALS
-                except ImportError:
-                    try:
-                        from lumi.assets.animal_registry import ANIMALS
-                    except ImportError:
-                        ANIMALS = {}
-                        
-                animal_data = ANIMALS.get(animal_lower, {'audio': 'bark'})
-                audio_type = animal_data.get('audio', 'bark')
-                
-                def save_wav(filename, samples, sample_rate=44100):
-                    with wave.open(filename, 'w') as f:
-                        f.setnchannels(1)
-                        f.setsampwidth(2)
-                        f.setframerate(sample_rate)
-                        for s in samples:
-                            f.writeframesraw(struct.pack('<h', int(max(-32767, min(32767, s * 32767)))))
-                
-                sr = 44100
-                samples = []
-                
-                if audio_type in ['chirp', 'squeak', 'eagle_cry']:
-                    duration = 0.2
-                    for i in range(int(sr * duration)):
-                        t = i / sr
-                        freq = 2000 + 3000 * (t / duration)
-                        amp = math.sin(t * math.pi / duration)
-                        samples.append(math.sin(2 * math.pi * freq * t) * amp)
-                        
-                elif audio_type in ['meow', 'howl']:
-                    duration = 0.8
-                    for i in range(int(sr * duration)):
-                        t = i / sr
-                        freq = 600 + (400 * (t / 0.3)) if t < 0.3 else 1000 - (500 * ((t - 0.3) / 0.5))
-                        env = math.sin(t * math.pi / duration)
-                        samples.append((math.sin(2 * math.pi * freq * t) + 0.3 * math.sin(2 * math.pi * freq * 2 * t)) * env * 0.8)
-                        
-                elif audio_type in ['roar', 'grunt', 'trumpet', 'moo']:
-                    duration = 1.0
-                    for i in range(int(sr * duration)):
-                        t = i / sr
-                        env = math.sin(t * math.pi / duration)
-                        noise = random.uniform(-1, 1)
-                        tone = math.sin(2 * math.pi * 150 * t)
-                        samples.append((noise * 0.7 + tone * 0.3) * env * 0.9)
-                        
-                elif audio_type in ['bubble', 'quack', 'croak', 'honk', 'gobble', 'caw']:
-                    duration = 0.4
-                    for i in range(int(sr * duration)):
-                        t = i / sr
-                        env = math.exp(-t * 8) * math.sin(t * 10 * math.pi) # Repeating bursts
-                        noise = random.uniform(-1, 1)
-                        freq = 400 + 200 * math.sin(t * 50)
-                        tone = math.sin(2 * math.pi * freq * t)
-                        samples.append((noise * 0.2 + tone * 0.8) * max(0, env))
-                        
-                elif audio_type in ['hiss']:
-                    duration = 0.5
-                    for i in range(int(sr * duration)):
-                        t = i / sr
-                        env = math.sin(t * math.pi / duration)
-                        noise = random.uniform(-1, 1)
-                        samples.append(noise * env * 0.6)
-                        
-                else: # default to bark/misc
-                    duration = 0.3
-                    for i in range(int(sr * duration)):
-                        t = i / sr
-                        env = math.exp(-t * 15)
-                        noise = random.uniform(-1, 1)
-                        freq = 300 - (100 * (t / duration))
-                        tone = math.sin(2 * math.pi * freq * t)
-                        samples.append((noise * 0.4 + tone * 0.6) * env)
-                
-                save_wav(wav_path, samples)
-                if os.path.exists(wav_path) and hasattr(self.speaker, "play_file"):
-                    self.speaker.play_file(wav_path, block=False)
-                    audio_found = True
-            except Exception as e:
-                logger.error(f"Failed to synthesize audio: {e}")
 
         # Display Procedural Animation directly on the display
         if hasattr(self.eyes, "show_procedural_animal"):
@@ -2642,11 +2500,8 @@ class LumiBrain:
                 self.eyes.show_procedural_animal(animal_lower, duration=4.0)
             except Exception as e:
                 logger.error(f"Failed to play procedural animation: {e}")
-                
-        if audio_found:
-            return f"Successfully displayed procedural {animal} animation and played synthesized sound. Acknowledge this playfully."
-        else:
-            return f"Successfully displayed procedural {animal} animation. Make a cute {animal} sound with your voice now!"
+
+        return f"Successfully displayed procedural {animal} expression on screen."
 
     def _tool_leave_message(self, recipient_name: str, sender_name: str, message_text: str) -> str:
         if not hasattr(self.memory, "leave_message"):
@@ -2752,17 +2607,14 @@ class LumiBrain:
         if hasattr(self.realtime_voice, "reset_dialogue_state"):
             self.realtime_voice.reset_dialogue_state()
 
-        # Inject specialized child therapy prompt into Gemini Live
+        # Inject specialized child therapy prompt into Gemini Live with normal voice
         if hasattr(self.realtime_voice, "inject_context"):
             from ..ai.prompts import ANJUM_SYSTEM_PROMPT_BN
             self.realtime_voice.inject_context(
                 f"[SYSTEM DIRECTIVE: ANJUM MODE ACTIVATED]\n{ANJUM_SYSTEM_PROMPT_BN}\n"
-                "Say greeting with high excitement and love in Bengali!"
+                f"Greet Anjum enthusiastically and warmly with your normal voice (Kore): '{greeting}'",
+                trigger_response=True,
             )
-
-        audio_path = self.tts.synthesize(greeting)
-        if audio_path:
-            self.speaker.play_file(audio_path, block=False)
 
     def _exit_anjum_mode(self) -> None:
         """Exits Anjum mode after 10-second timeout and returns to IDLE."""
@@ -2775,10 +2627,6 @@ class LumiBrain:
         # Reset dialogue state to purge child persona
         if hasattr(self.realtime_voice, "reset_dialogue_state"):
             self.realtime_voice.reset_dialogue_state()
-
-        audio_path = self.tts.synthesize(goodbye)
-        if audio_path:
-            self.speaker.play_file(audio_path, block=False)
 
         if hasattr(self.realtime_voice, "inject_context"):
             self.realtime_voice.inject_context(

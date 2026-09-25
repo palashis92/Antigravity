@@ -51,6 +51,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         self._current_process: Optional[subprocess.Popen] = None
         self._stream_proc: Optional[subprocess.Popen] = None
         self._stream_queue: queue.Queue = queue.Queue()
+        self._last_stream_write_time: float = 0.0
         self._stream_running = True
         self._stream_thread = threading.Thread(
             target=self._stream_worker_loop, daemon=True, name="I2SStreamWorker"
@@ -148,6 +149,7 @@ class I2SSpeakerBackend(SpeakerBackendBase):
                 if proc and proc.stdin:
                     proc.stdin.write(stereo_bytes)
                     proc.stdin.flush()
+                    self._last_stream_write_time = time.time()
             except Exception as e:
                 err_text = ""
                 if proc is not None and proc.stderr:
@@ -200,11 +202,21 @@ class I2SSpeakerBackend(SpeakerBackendBase):
         """True if the speaker backend is actively outputting sound."""
         if self._current_process is not None and self._current_process.poll() is None:
             return True
-        if self._stream_proc is not None and self._stream_proc.poll() is None:
-            return True
         if hasattr(self, "_stream_queue") and not self._stream_queue.empty():
             return True
+        if self._stream_proc is not None and self._stream_proc.poll() is None:
+            if (time.time() - getattr(self, "_last_stream_write_time", 0.0)) < 0.25:
+                return True
         return False
+
+    def stop_stream(self) -> None:
+        """Flush stream queue and reset stream write timer immediately."""
+        while hasattr(self, "_stream_queue") and not self._stream_queue.empty():
+            try:
+                self._stream_queue.get_nowait()
+            except Exception:
+                break
+        self._last_stream_write_time = 0.0
 
     def _convert_to_clean_wav(self, input_path: str) -> str:
         """Convert MP3/compressed audio to 16-bit 44.1kHz Stereo PCM WAV for clean I2S DAC output."""
