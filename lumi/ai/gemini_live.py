@@ -555,6 +555,15 @@ class GeminiLiveClient:
                     if pending:
                         await asyncio.gather(*pending, return_exceptions=True)
 
+                    self._is_ready = False
+                    self._ws = None
+                    if hasattr(self, "_audio_queue") and self._audio_queue:
+                        while not self._audio_queue.empty():
+                            try:
+                                self._audio_queue.get_nowait()
+                            except Exception:
+                                break
+
                     if self._rotation_requested:
                         logger.info("Proactive session rotation: cleanly cycling WebSocket...")
                         from ..core.telemetry import get_telemetry
@@ -563,6 +572,8 @@ class GeminiLiveClient:
                         continue
                     
             except Exception as e:
+                self._is_ready = False
+                self._ws = None
                 if not self._running:
                     break
                 logger.warning(f"Gemini connection dropped: {e}. Reconnecting...")
@@ -783,6 +794,9 @@ class GeminiLiveClient:
             return
         if not self._loop or not self._loop.is_running():
             return
+        # Don't buffer audio when WebSocket is not connected or handshake is pending
+        if not getattr(self, "_is_ready", False) or not getattr(self, "_ws", None):
+            return
             
         # Software AEC (Echo Prevention): Drop mic chunks completely while speaker is playing
         if time.time() < getattr(self, "_speaker_active_until", 0):
@@ -799,7 +813,16 @@ class GeminiLiveClient:
             try:
                 self._audio_queue.put_nowait(chunk)
             except asyncio.QueueFull:
-                logger.warning("Audio queue full — dropping chunk. Gemini may miss audio.")
+                # Drop oldest chunk to prioritize live, fresh audio
+                try:
+                    self._audio_queue.get_nowait()
+                    self._audio_queue.put_nowait(chunk)
+                except Exception:
+                    pass
+                now = time.time()
+                if (now - getattr(self, "_last_queue_warn_time", 0.0)) > 5.0:
+                    self._last_queue_warn_time = now
+                    logger.warning("Audio queue full — dropping old chunks to maintain real-time low latency.")
         
         try:
             self._loop.call_soon_threadsafe(_safe_put)
@@ -809,7 +832,7 @@ class GeminiLiveClient:
     async def _send_av_loop(self, ws: Any) -> None:
         self._awake = True
         self._awake_forever = True
-        self._audio_queue = asyncio.Queue(maxsize=100)
+        self._audio_queue = asyncio.Queue(maxsize=200)
         _debug_chunk_count = 0
         try:
             while self._running and not self._rotation_requested:
