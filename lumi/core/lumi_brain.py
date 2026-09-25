@@ -186,6 +186,7 @@ class LumiBrain:
                 "description": {"type": "string", "description": "Optional details about the reminder."}
             },
             "required": ["title", "remind_at_iso"]
+        })
         self.tools.register("send_email", self._tool_send_email, "Send an email.", {
             "type": "object", "properties": {"to_address": {"type": "string"}, "subject": {"type": "string"}, "message": {"type": "string"}}, "required": ["to_address", "subject", "message"]
         })
