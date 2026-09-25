@@ -21,10 +21,28 @@ from ..core.logger import get_logger
 logger = get_logger("integrations.email")
 
 
+def _load_dotenv_if_needed() -> None:
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    if env_path.exists():
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, val = line.partition("=")
+                        key = key.strip()
+                        val = val.strip().strip("'\"")
+                        if key and key not in os.environ:
+                            os.environ[key] = val
+        except Exception:
+            pass
+
+
 class EmailClient:
     """Unified client for sending emails with optional attachments."""
 
     def __init__(self) -> None:
+        _load_dotenv_if_needed()
         self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.smtp_user = os.getenv("SMTP_USER", "").strip() or None

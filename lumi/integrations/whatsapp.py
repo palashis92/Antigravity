@@ -29,10 +29,29 @@ from ..core.logger import get_logger
 logger = get_logger("integrations.whatsapp")
 
 
+def _load_dotenv_if_needed() -> None:
+    env_path = Path(__file__).resolve().parent.parent.parent / ".env"
+    if env_path.exists():
+        try:
+            with open(env_path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        key, _, val = line.partition("=")
+                        key = key.strip()
+                        val = val.strip().strip("'\"")
+                        if key and key not in os.environ:
+                            os.environ[key] = val
+        except Exception:
+            pass
+
+
 class WhatsAppClient:
     """Unified client for sending WhatsApp text messages and PDF documents."""
 
     def __init__(self) -> None:
+        _load_dotenv_if_needed()
+
         # 1. Meta WhatsApp Cloud API credentials
         self.meta_token = os.getenv("WHATSAPP_API_TOKEN")
         self.meta_phone_id = os.getenv("WHATSAPP_PHONE_NUMBER_ID")
@@ -43,8 +62,8 @@ class WhatsAppClient:
         self.twilio_from = os.getenv("TWILIO_WHATSAPP_NUMBER")
 
         # 3. Green API credentials (Personal WhatsApp via QR)
-        self.green_instance = os.getenv("GREEN_API_INSTANCE_ID") or os.getenv("WHATSAPP_INSTANCE_ID")
-        self.green_token = os.getenv("GREEN_API_TOKEN") or os.getenv("WHATSAPP_INSTANCE_TOKEN")
+        self.green_instance = (os.getenv("GREEN_API_INSTANCE_ID") or os.getenv("WHATSAPP_INSTANCE_ID") or "").strip()
+        self.green_token = (os.getenv("GREEN_API_TOKEN") or os.getenv("WHATSAPP_INSTANCE_TOKEN") or "").strip()
 
         # Detect active provider
         if self.meta_token and self.meta_phone_id:
