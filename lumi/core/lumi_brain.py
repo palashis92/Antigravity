@@ -109,10 +109,12 @@ class LumiBrain:
         self.meeting_manager = MeetingManager(self.memory.db)
         self.stt = BanglaSTT()
 
-        # WhatsApp Integrations Subsystems
+        # WhatsApp & Email Integrations Subsystems
         from ..integrations.whatsapp import WhatsAppClient
         from ..integrations.message_polisher import refine_whatsapp_message
+        from ..integrations.email_client import EmailClient
         self.whatsapp = WhatsAppClient()
+        self.email_client = EmailClient()
         self.refine_message = refine_whatsapp_message
 
         # Companion Subsystem (Speech Therapy for Anjum)
@@ -187,8 +189,14 @@ class LumiBrain:
             },
             "required": ["title", "remind_at_iso"]
         })
-        self.tools.register("send_email", self._tool_send_email, "Send an email.", {
-            "type": "object", "properties": {"to_address": {"type": "string"}, "subject": {"type": "string"}, "message": {"type": "string"}}, "required": ["to_address", "subject", "message"]
+        self.tools.register("send_email", self._tool_send_email, "Send an email to a recipient email address or known contact person name.", {
+            "type": "object",
+            "properties": {
+                "to_address": {"type": "string", "description": "Recipient email address (e.g. 'john@example.com') or contact person name (e.g. 'Mizan')."},
+                "subject": {"type": "string", "description": "Subject line of the email."},
+                "message": {"type": "string", "description": "The message body to send."}
+            },
+            "required": ["to_address", "subject", "message"]
         })
         self.tools.register("send_whatsapp", self._tool_send_whatsapp, "Send a WhatsApp message to a contact name or phone number. Automatically refines and polishes the user's spoken words into polite, well-articulated Bengali before sending.", {
             "type": "object",
@@ -2411,8 +2419,34 @@ class LumiBrain:
             return f"Failed to set reminder: {e}"
 
     def _tool_send_email(self, to_address: str, subject: str, message: str) -> str:
-        logger.info(f"Mock sending Email to {to_address} with subject '{subject}': {message}")
-        return f"Email successfully queued to {to_address}."
+        """Send an email to a specific address or resolved person name."""
+        if not hasattr(self, "email_client"):
+            return "ইমেইল সাবসিস্টেম প্রস্তুত নয়।"
+
+        target_email = to_address.strip()
+        recipient_name = to_address.strip()
+
+        # 1. Resolve contact name to email if known person
+        if "@" not in target_email:
+            person = self.memory.find_person_by_name(target_email)
+            if person:
+                recipient_name = person.name
+                if isinstance(person.metadata, dict) and person.metadata.get("email"):
+                    target_email = person.metadata["email"]
+                else:
+                    return (
+                        f"'{person.name}' আমার মেমোরিতে আছেন, কিন্তু উনার কোনো ইমেইল ঠিকানা সেভ করা নেই। "
+                        f"অনুগ্রহ করে ইমেইলটি বলুন, আমি সেভ করে পাঠিয়ে দিচ্ছি।"
+                    )
+
+        success, status_msg = self.email_client.send_email(
+            to_address=target_email,
+            subject=subject,
+            message=message
+        )
+        if success:
+            return f"সফলভাবে {recipient_name}-কে ইমেইল পাঠানো হয়েছে:\nবিষয়: {subject}\nবার্তা: {message}"
+        return f"ইমেইল পাঠাতে ব্যর্থ হয়েছে: {status_msg}"
 
     def _tool_send_whatsapp(self, recipient: str, message: str, polish_message: bool = True) -> str:
         """Send a WhatsApp message with AI refinement and contact resolution."""
