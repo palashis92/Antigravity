@@ -27,8 +27,9 @@ class EmailClient:
     def __init__(self) -> None:
         self.smtp_host = os.getenv("SMTP_HOST", "smtp.gmail.com")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
-        self.smtp_user = os.getenv("SMTP_USER")
-        self.smtp_password = os.getenv("SMTP_PASSWORD")
+        self.smtp_user = os.getenv("SMTP_USER", "").strip() or None
+        raw_pw = os.getenv("SMTP_PASSWORD")
+        self.smtp_password = raw_pw.replace(" ", "").strip() if raw_pw else None
         self.smtp_from = os.getenv("SMTP_FROM") or self.smtp_user or "lumi@robot.local"
         self.use_tls = os.getenv("SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
 
